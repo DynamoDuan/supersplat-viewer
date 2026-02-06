@@ -5,7 +5,6 @@ import {
     Entity,
     GSplatComponent,
     ShaderMaterial,
-    StandardMaterial,
     Mesh,
     MeshInstance,
     Vec3,
@@ -33,9 +32,12 @@ class CentersOverlay {
     private highlightedPointId = -1;
     private maxPoints = 100000;  // Maximum number of points to display (default: 100k)
 
-    // Hover sphere for showing green ball on hovered point
-    private hoverSphere: Entity | null = null;
-    private hoveredPointPosition: Vec3 | null = null;
+    // Proximity highlight state
+    private cursorPosition: Vec3 = new Vec3();
+    private cursorHighlightEnabled = false;
+    private cursorHighlightRadius = 0.2;  // Default radius in world units
+    private cursorHighlightColor = new Color(0.0, 1.0, 0.0, 1.0);  // Green for cursor proximity
+    private cursorNeighborColor = new Color(0.5, 1.0, 0.5, 1.0);  // Light green for neighbors
 
     constructor(app: AppBase) {
         this.app = app;
@@ -64,8 +66,10 @@ class CentersOverlay {
         });
         this.material.blendType = BLEND_NORMAL;
         this.material.depthWrite = false;
-        // Disable depth test so centers render on top of splats
-        this.material.depthTest = false;
+        // Enable depth test but use ALWAYS function to ensure centers render on top
+        // This ensures centers are not occluded by gaussians
+        this.material.depthTest = true;
+        this.material.depthFunc = 7; // FUNC_ALWAYS (always pass depth test)
         this.material.update();
 
         // Create mesh with point primitive
@@ -78,8 +82,8 @@ class CentersOverlay {
         };
 
         this.meshInstance = new MeshInstance(this.mesh, this.material, null);
-        // Use a higher draw bucket to render after splats
-        this.meshInstance.drawBucket = 200;
+        // Use a much higher draw bucket to render after all splats
+        this.meshInstance.drawBucket = 300;
         this.meshInstance.cull = false;
 
         // Create entity
@@ -91,30 +95,6 @@ class CentersOverlay {
 
         // Attach to gsplat entity
         gsplatEntity.addChild(this.entity);
-
-        // Create hover sphere (green ball) for highlighting hovered point
-        this.hoverSphere = new Entity('hoverSphere');
-
-        // Create green material
-        const greenMaterial = new StandardMaterial();
-        greenMaterial.diffuse.set(0, 1, 0);  // Green color
-        greenMaterial.emissive.set(0, 0.8, 0);  // Green emissive for visibility
-        greenMaterial.opacity = 0.9;
-        greenMaterial.blendType = BLEND_NORMAL;
-        greenMaterial.depthTest = false;  // Always render on top
-        greenMaterial.depthWrite = false;
-        greenMaterial.update();
-
-        this.hoverSphere.addComponent('render', {
-            type: 'sphere',
-            material: greenMaterial,
-            layers: [scene.layers.getLayerByName('World').id]
-        });
-        this.hoverSphere.setLocalScale(0.05, 0.05, 0.05);  // Small sphere
-        this.hoverSphere.enabled = false;  // Hidden by default
-
-        // Attach to gsplat entity (in world space)
-        gsplatEntity.addChild(this.hoverSphere);
 
         // Set up uniforms from gsplat instance
         this.updateUniforms(gsplat);
@@ -221,16 +201,11 @@ class CentersOverlay {
             this.entity.destroy();
             this.entity = null;
         }
-        if (this.hoverSphere) {
-            this.hoverSphere.remove();
-            this.hoverSphere.destroy();
-            this.hoverSphere = null;
-        }
         this.mesh = null;
         this.material = null;
         this.meshInstance = null;
         this.gsplatEntity = null;
-        this.hoveredPointPosition = null;
+        this.cursorHighlightEnabled = false;
     }
 
     /**
@@ -268,6 +243,21 @@ class CentersOverlay {
         this.material.setParameter('useGaussianColor', this.useGaussianColor ? 1.0 : 0.0);
         this.material.setParameter('highlightedId', this.highlightedPointId);
 
+        // Proximity highlight uniforms (real-time cursor highlighting)
+        this.material.setParameter('cursorPosition', [this.cursorPosition.x, this.cursorPosition.y, this.cursorPosition.z]);
+        this.material.setParameter('cursorHighlightRadius', this.cursorHighlightRadius);
+        this.material.setParameter('cursorHighlightEnabled', this.cursorHighlightEnabled ? 1.0 : 0.0);
+        this.material.setParameter('cursorHighlightColor', [
+            this.cursorHighlightColor.r,
+            this.cursorHighlightColor.g,
+            this.cursorHighlightColor.b
+        ]);
+        this.material.setParameter('cursorNeighborColor', [
+            this.cursorNeighborColor.r,
+            this.cursorNeighborColor.g,
+            this.cursorNeighborColor.b
+        ]);
+
         // Pass camera position for SH evaluation
         // Get camera from the global viewer state
         const cameraEntity = (this.app as any).root?.findByName?.('camera') || 
@@ -282,20 +272,6 @@ class CentersOverlay {
         }
 
         this.material.update();
-
-        // Update hover sphere
-        if (this.hoverSphere && this.gsplatEntity) {
-            if (this.hoveredPointPosition && this.enabled) {
-                this.hoverSphere.enabled = true;
-                // Convert world position to local position relative to gsplatEntity
-                const worldTransform = this.gsplatEntity.getWorldTransform();
-                const localPos = new Vec3();
-                worldTransform.invert().transformPoint(this.hoveredPointPosition, localPos);
-                this.hoverSphere.setLocalPosition(localPos);
-            } else {
-                this.hoverSphere.enabled = false;
-            }
-        }
     }
 
     /**
@@ -303,9 +279,9 @@ class CentersOverlay {
      */
     setEnabled(enabled: boolean) {
         this.enabled = enabled;
-        // Hide hover sphere when centers are disabled
-        if (!enabled && this.hoverSphere) {
-            this.hoverSphere.enabled = false;
+        // Disable cursor highlighting when centers are disabled
+        if (!enabled) {
+            this.cursorHighlightEnabled = false;
         }
     }
 
@@ -345,10 +321,38 @@ class CentersOverlay {
     }
 
     /**
-     * Set hovered point position (shows green sphere at this position)
+     * Set cursor position for proximity highlighting
+     * When enabled, points near this position will automatically change color
+     * @param position - World space position of cursor
+     * @param enabled - Whether to enable cursor highlighting
      */
-    setHoveredPointPosition(position: Vec3 | null) {
-        this.hoveredPointPosition = position;
+    setCursorPosition(position: Vec3 | null, enabled = true) {
+        if (position) {
+            this.cursorPosition.copy(position);
+            this.cursorHighlightEnabled = enabled;
+        } else {
+            this.cursorHighlightEnabled = false;
+        }
+    }
+
+    /**
+     * Set the radius for cursor proximity highlighting
+     * @param radius - Radius in world units
+     */
+    setCursorHighlightRadius(radius: number) {
+        this.cursorHighlightRadius = radius;
+    }
+
+    /**
+     * Set the highlight color for cursor proximity
+     * @param color - Main highlight color (for points very close to cursor)
+     * @param neighborColor - Neighbor highlight color (for points in outer radius)
+     */
+    setCursorHighlightColor(color: Color, neighborColor?: Color) {
+        this.cursorHighlightColor.copy(color);
+        if (neighborColor) {
+            this.cursorNeighborColor.copy(neighborColor);
+        }
     }
 
     /**

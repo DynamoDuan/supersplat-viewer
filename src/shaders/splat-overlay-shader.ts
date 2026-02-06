@@ -34,6 +34,13 @@ const vertexShader = /* glsl */ `
     uniform vec4 unselectedClr;
     uniform int highlightedId;                      // ID of highlighted point (-1 = none)
 
+    // Proximity highlight uniforms (real-time cursor highlighting)
+    uniform vec3 cursorPosition;                    // World position of mouse cursor (from picker)
+    uniform float cursorHighlightRadius;            // Radius for cursor proximity highlight
+    uniform float cursorHighlightEnabled;           // Enable/disable cursor highlighting (0.0 = off, 1.0 = on)
+    uniform vec3 cursorHighlightColor;              // Color for points near cursor
+    uniform vec3 cursorNeighborColor;               // Color for neighbor points (further away)
+
     varying vec4 varying_color;
 
     // calculate the current splat index and uv
@@ -141,12 +148,33 @@ const vertexShader = /* glsl */ `
                 finalColor = mix(gaussianClr, selectedClr.xyz, 0.3);
             }
 
-            // Apply highlight if this is the highlighted point
+            // Proximity-based cursor highlighting (real-time)
+            // Calculate distance from this point to cursor position
+            float distToCursor = 0.0;
+            if (cursorHighlightEnabled > 0.5) {
+                vec3 worldPos = (model * vec4(center, 1.0)).xyz;
+                distToCursor = distance(worldPos, cursorPosition);
+
+                // Define two radii: inner (cursor) and outer (neighbor)
+                float innerRadius = cursorHighlightRadius * 0.5;      // Main highlight radius
+                float outerRadius = cursorHighlightRadius;             // Neighbor highlight radius
+
+                if (distToCursor < innerRadius) {
+                    // Point is very close to cursor - use main highlight color
+                    finalColor = cursorHighlightColor;
+                } else if (distToCursor < outerRadius) {
+                    // Point is in neighbor zone - blend based on distance
+                    float t = (distToCursor - innerRadius) / (outerRadius - innerRadius);
+                    finalColor = mix(cursorNeighborColor, finalColor, t);
+                }
+            }
+
+            // Apply highlight if this is the highlighted point (by ID)
             // Only highlight if highlightedId is valid (>= 0) and matches this splat
             // Compare as int to avoid uint conversion issues with -1
             bool isHighlighted = (highlightedId >= 0) && (int(splatId) == highlightedId);
-            if (isHighlighted) {
-                // Bright yellow highlight
+            if (isHighlighted && cursorHighlightEnabled < 0.5) {
+                // Bright yellow highlight (only when cursor highlighting is off)
                 finalColor = mix(finalColor, vec3(1.0, 0.9, 0.0), 0.7);
             }
             

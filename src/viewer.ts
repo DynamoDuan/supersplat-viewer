@@ -311,6 +311,7 @@ class Viewer {
         // Listen for showCenters state changes
         events.on('showCenters:changed', (value: boolean) => {
             this.centersOverlay.setEnabled(value);
+            console.log('showCenters changed to:', value, 'overlay enabled:', this.centersOverlay.isEnabled);
         });
 
         // Listen for centers point size changes
@@ -320,69 +321,6 @@ class Viewer {
 
         // Initialize point size from state
         this.centersOverlay.setPointSize(state.centersPointSize);
-
-        // Handle mouse move for highlighting centers
-        const canvas = graphicsDevice.canvas;
-        let picker: any = null;
-        let highlightTimeout: number | null = null;
-
-        const updateHighlight = async (x: number, y: number) => {
-            if (!state.showCenters || !this.centersOverlay.isEnabled) {
-                this.centersOverlay.setHighlightedPointId(-1);
-                this.centersOverlay.setHoveredPointPosition(null);
-                return;
-            }
-
-            try {
-                // Use picker to get world position under cursor
-                if (!picker) {
-                    const { Picker } = await import('./picker');
-                    picker = new Picker(app, camera);
-                }
-
-                const worldPos = await picker.pick(x, y);
-                if (!worldPos) {
-                    this.centersOverlay.setHighlightedPointId(-1);
-                    this.centersOverlay.setHoveredPointPosition(null);
-                    return;
-                }
-
-                // Show green sphere at the picked position
-                // The picked position should be on a splat center since we're hovering over points
-                this.centersOverlay.setHoveredPointPosition(worldPos);
-            } catch (error) {
-                // Silently handle errors
-                console.debug('Highlight error:', error);
-                this.centersOverlay.setHoveredPointPosition(null);
-            }
-        };
-
-        canvas.addEventListener('mousemove', (e: MouseEvent) => {
-            if (!state.showCenters) {
-                this.centersOverlay.setHighlightedPointId(-1);
-                this.centersOverlay.setHoveredPointPosition(null);
-                return;
-            }
-
-            const x = e.offsetX / canvas.clientWidth;
-            const y = e.offsetY / canvas.clientHeight;
-
-            // Debounce highlight updates
-            if (highlightTimeout) {
-                clearTimeout(highlightTimeout);
-            }
-            highlightTimeout = window.setTimeout(() => {
-                updateHighlight(x, y);
-            }, 50);
-        });
-
-        canvas.addEventListener('mouseleave', () => {
-            if (highlightTimeout) {
-                clearTimeout(highlightTimeout);
-            }
-            this.centersOverlay.setHighlightedPointId(-1);
-            this.centersOverlay.setHoveredPointPosition(null);
-        });
 
         // wait for the model to load
         Promise.all([gsplatLoad, skyboxLoad]).then((results) => {
@@ -405,6 +343,52 @@ class Viewer {
 
             this.cameraManager = new CameraManager(global, sceneBound);
             applyCamera(this.cameraManager.camera);
+
+            // Setup mouse move for real-time cursor highlighting AFTER cameraManager is initialized
+            const canvas = graphicsDevice.canvas;
+
+            canvas.addEventListener('mousemove', (e: MouseEvent) => {
+                if (!state.showCenters || !this.centersOverlay.isEnabled) {
+                    return;
+                }
+
+                const cameraEntity = global.camera;
+
+                // Calculate ray from camera through mouse position
+                const rayOrigin = cameraEntity.getPosition();
+                const rayDir = new Vec3();
+
+                // Get the point at depth=1.0 (on the far plane)
+                cameraEntity.camera.screenToWorld(
+                    e.offsetX,
+                    e.offsetY,
+                    1.0,
+                    rayDir
+                );
+
+                // Calculate direction from camera to that point
+                rayDir.sub(rayOrigin).normalize();
+
+                // Project to the center of the scene (use camera target distance)
+                let distance = 2.0; // Default fallback distance
+
+                if (this.cameraManager && this.cameraManager.camera && this.cameraManager.camera.distance) {
+                    distance = this.cameraManager.camera.distance;
+                }
+
+                const worldPos = rayOrigin.clone().add(rayDir.clone().mulScalar(distance));
+
+                // Enable cursor proximity highlighting at this position
+                this.centersOverlay.setCursorPosition(worldPos, true);
+
+                // Request immediate render
+                app.renderNextFrame = true;
+            });
+
+            canvas.addEventListener('mouseleave', () => {
+                this.centersOverlay.setCursorPosition(null, false);
+                app.renderNextFrame = true;
+            });
 
             const { instance } = gsplat;
             if (instance) {
@@ -486,10 +470,8 @@ class Viewer {
                                 // disable LOD rendering by setting budget to 0
                                 results[0].gsplat.splatBudget = 0;
                             } else {
-                                const settings = state.renderMode === 'high' ? quality.high : quality.low;
-                                gsplat.lodRangeMin = settings.range[0];
-                                gsplat.lodRangeMax = settings.range[1];
-                                results[0].gsplat.splatBudget = settings.splatBudget * 1000000;
+                                const splatBudget = state.renderMode === 'high' ? quality.high : quality.low;
+                                results[0].gsplat.splatBudget = splatBudget * 1000000;
                             }
                         };
                         events.on('renderMode:changed', updateLod);
