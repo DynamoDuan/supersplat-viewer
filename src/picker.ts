@@ -1,62 +1,25 @@
 import {
     type AppBase,
     type Entity,
-    type MeshInstance,
-    ADDRESS_CLAMP_TO_EDGE,
-    BLENDEQUATION_ADD,
-    BLENDMODE_ZERO,
-    BLENDMODE_ONE,
-    BLENDMODE_ONE_MINUS_SRC_ALPHA,
-    FILTER_NEAREST,
-    PIXELFORMAT_RGBA16F,
-    Color,
+    GSplatComponent,
     Ray,
-    RenderPassPicker,
     RenderTarget,
-    Texture,
     Vec3,
-    BlendState,
     PROJECTION_ORTHOGRAPHIC
 } from 'playcanvas';
 
 const vec = new Vec3();
 const vecb = new Vec3();
 const ray = new Ray();
-const clearColor = new Color(0, 0, 0, 1);
+const tempVec = new Vec3();
+const tempVec2 = new Vec3();
 
-// Shared buffer for half-to-float conversion
-const float32 = new Float32Array(1);
-const uint32 = new Uint32Array(float32.buffer);
-
-// Convert 16-bit half-float to 32-bit float using bit manipulation
-const half2Float = (h: number): number => {
-    const sign = (h & 0x8000) << 16;           // Move sign to bit 31
-    const exponent = (h & 0x7C00) >> 10;       // Extract 5-bit exponent
-    const mantissa = h & 0x03FF;               // Extract 10-bit mantissa
-
-    if (exponent === 0) {
-        if (mantissa === 0) {
-            // Zero
-            uint32[0] = sign;
-        } else {
-            // Denormalized: convert to normalized float32
-            let e = -1;
-            let m = mantissa;
-            do {
-                e++;
-                m <<= 1;
-            } while ((m & 0x0400) === 0);
-            uint32[0] = sign | ((127 - 15 - e) << 23) | ((m & 0x03FF) << 13);
-        }
-    } else if (exponent === 31) {
-        // Infinity or NaN
-        uint32[0] = sign | 0x7F800000 | (mantissa << 13);
-    } else {
-        // Normalized: adjust exponent bias from 15 to 127
-        uint32[0] = sign | ((exponent + 127 - 15) << 23) | (mantissa << 13);
-    }
-
-    return float32[0];
+// Convert uint bits to float (for reading position texture)
+const uintBitsToFloat = (bits: number): number => {
+    const buffer = new ArrayBuffer(4);
+    const view = new DataView(buffer);
+    view.setUint32(0, bits, true);
+    return view.getFloat32(0, true);
 };
 
 // get the normalized world-space ray starting at the camera position
@@ -78,115 +41,190 @@ const getRay = (camera: Entity, screenX: number, screenY: number, ray: Ray) => {
     }
 };
 
+// Calculate distance from point to ray (similar to annotation.html)
+const findClosestPointOnRay = (rayOrigin: Vec3, rayDirection: Vec3, pointPosition: Vec3, pointRadius: number): { distance: number; t: number; point: Vec3 } | null => {
+    // Calculate vector from ray origin to point
+    tempVec.sub2(pointPosition, rayOrigin);
+    const projectionLength = tempVec.dot(rayDirection);
+    
+    // If projection is behind ray, skip
+    if (projectionLength < 0) {
+        return null;
+    }
+    
+    // Calculate closest point on ray
+    tempVec2.copy(rayOrigin).addScaled(rayDirection, projectionLength);
+    
+    // Calculate distance
+    const distance = tempVec2.distance(pointPosition);
+    
+    // If distance is within point radius, return distance and projection length
+    if (distance <= pointRadius) {
+        return {
+            distance: distance,
+            t: projectionLength,
+            point: pointPosition.clone()
+        };
+    }
+    
+    return null;
+};
+
 class Picker {
     pick: (x: number, y: number) => Promise<Vec3 | null>;
 
     release: () => void;
 
-    constructor(app: AppBase, camera: Entity) {
-        const { graphicsDevice } = app;
+    private gsplatEntity: Entity | null = null;
+    private cachedPositions: Vec3[] | null = null;
+    private positionCacheValid = false;
 
-        let colorBuffer: Texture;
-        let renderTarget: RenderTarget;
-        let renderPass: RenderPassPicker;
+    constructor(app: AppBase, camera: Entity, gsplatEntity?: Entity) {
+        this.gsplatEntity = gsplatEntity || null;
 
-        const emptyMap = new Map<number, MeshInstance>();
-
-        const init = (width: number, height: number) => {
-            colorBuffer = new Texture(graphicsDevice, {
-                format: PIXELFORMAT_RGBA16F,
-                width: width,
-                height: height,
-                mipmaps: false,
-                minFilter: FILTER_NEAREST,
-                magFilter: FILTER_NEAREST,
-                addressU: ADDRESS_CLAMP_TO_EDGE,
-                addressV: ADDRESS_CLAMP_TO_EDGE,
-                name: 'picker'
-            });
-
-            renderTarget = new RenderTarget({
-                colorBuffer,
-                depth: false  // not needed - gaussians are rendered back to front
-            });
-
-            renderPass = new RenderPassPicker(graphicsDevice, app.renderer);
-            // RGB: additive depth accumulation (ONE, ONE_MINUS_SRC_ALPHA)
-            // Alpha: multiplicative transmittance (ZERO, ONE_MINUS_SRC_ALPHA) -> T = T * (1 - alpha)
-            renderPass.blendState = new BlendState(
-                true,
-                BLENDEQUATION_ADD, BLENDMODE_ONE, BLENDMODE_ONE_MINUS_SRC_ALPHA,           // RGB blend
-                BLENDEQUATION_ADD, BLENDMODE_ZERO, BLENDMODE_ONE_MINUS_SRC_ALPHA           // Alpha blend (transmittance)
-            );
-        };
-
-        this.pick = async (x: number, y: number) => {
-            const width = Math.floor(graphicsDevice.width);
-            const height = Math.floor(graphicsDevice.height);
-
-            // convert from [0,1] to pixel coordinates
-            const screenX = Math.floor(x * graphicsDevice.width);
-            const screenY = Math.floor(y * graphicsDevice.height);
-
-            // flip Y for texture read on WebGL (texture origin is bottom-left)
-            const texX = screenX;
-            const texY = graphicsDevice.isWebGL2 ? height - screenY - 1 : screenY;
-
-            // construct picker on demand
-            if (!renderPass) {
-                init(width, height);
-            } else {
-                renderTarget.resize(width, height);
+        // Load point positions from texture (cache for performance)
+        const loadPositions = async () => {
+            if (!this.gsplatEntity || this.positionCacheValid) {
+                return;
             }
 
-            // render scene
-            renderPass.init(renderTarget);
-            renderPass.setClearColor(clearColor);
-            renderPass.update(camera.camera, app.scene, [app.scene.layers.getLayerByName('World')], emptyMap, false);
-            renderPass.render();
+            const gsplat = this.gsplatEntity.gsplat as GSplatComponent;
+            if (!gsplat || !gsplat.instance) {
+                return;
+            }
 
-            // read pixel using texture coordinates
-            const pixels = await colorBuffer.read(texX, texY, 1, 1, { renderTarget });
+            const resource = gsplat.instance.resource;
+            const posTexture = (resource as any).transformATexture;
+            if (!posTexture) {
+                return;
+            }
 
-            // convert half-float values to floats
-            // R channel: accumulated depth * alpha
-            // A channel: transmittance (1 - alpha), values near 0 have better half-float precision
-            const r = half2Float(pixels[0]);
-            const transmittance = half2Float(pixels[3]);
-            const alpha = 1 - transmittance;
+            const texWidth = posTexture.width;
+            const texHeight = posTexture.height;
+            const numSplats = (resource as any).numSplats || texWidth * texHeight;
 
-            // check alpha first (transmittance close to 1 means nothing visible)
-            if (alpha < 1e-6) {
+            // Read position texture data from GPU
+            // Note: Reading from GPU texture is expensive, so we cache the result
+            try {
+                const { graphicsDevice } = app;
+                
+                // Create a render target to read from the texture
+                const renderTarget = new RenderTarget({
+                    colorBuffer: posTexture,
+                    depth: false
+                });
+
+                // Read pixels from texture (RGBA32UI format: 4 uint32 per pixel)
+                const pixels = await posTexture.read(0, 0, texWidth, texHeight, { renderTarget });
+                const positions: Vec3[] = [];
+
+                // Parse RGBA32UI format (4 uint32 values per pixel)
+                // Each pixel contains: R=x(uint32), G=y(uint32), B=z(uint32), A=w(uint32)
+                for (let i = 0; i < numSplats && i < texWidth * texHeight; i++) {
+                    const x = i % texWidth;
+                    const y = Math.floor(i / texWidth);
+                    const pixelIdx = (y * texWidth + x) * 4;
+
+                    // Read 3 uint32 values (x, y, z) and convert to float
+                    // pixels is Uint32Array when reading RGBA32UI texture
+                    const px = uintBitsToFloat((pixels as Uint32Array)[pixelIdx]);
+                    const py = uintBitsToFloat((pixels as Uint32Array)[pixelIdx + 1]);
+                    const pz = uintBitsToFloat((pixels as Uint32Array)[pixelIdx + 2]);
+
+                    positions.push(new Vec3(px, py, pz));
+                }
+
+                renderTarget.destroy();
+
+                this.cachedPositions = positions;
+                this.positionCacheValid = true;
+            } catch (error) {
+                console.warn('Failed to read position texture (ray-based picking may be unavailable):', error);
+                // Fallback: return null to indicate picking is not available
+                this.cachedPositions = [];
+                this.positionCacheValid = true; // Mark as valid to avoid retrying
+            }
+        };
+
+        // Load positions asynchronously
+        loadPositions();
+
+        this.pick = async (x: number, y: number) => {
+            if (!this.gsplatEntity) {
                 return null;
             }
 
-            // get camera near/far for denormalization
-            const near = camera.camera.nearClip;
-            const far = camera.camera.farClip;
+            // Ensure positions are loaded
+            if (!this.positionCacheValid) {
+                await loadPositions();
+            }
 
-            // divide by alpha to get normalized depth, then denormalize to linear depth
-            const normalizedDepth = r / alpha;
-            const depth = normalizedDepth * (far - near) + near;
+            if (!this.cachedPositions || this.cachedPositions.length === 0) {
+                return null;
+            }
 
-            // get the ray from camera through the screen point (using pixel coords)
+            const gsplat = this.gsplatEntity.gsplat as GSplatComponent;
+            if (!gsplat) {
+                return null;
+            }
+
+            const { graphicsDevice } = app;
+
+            // Convert screen coordinates to normalized device coordinates [-1, 1]
+            const screenX = (x * 2) - 1;
+            const screenY = -((y * 2) - 1); // Flip Y
+
+            // Get ray from camera through screen point
             getRay(camera,
                 Math.floor(x * graphicsDevice.canvas.offsetWidth),
                 Math.floor(y * graphicsDevice.canvas.offsetHeight),
                 ray
             );
 
-            // convert linear depth (view-space z distance) to ray distance
-            const forward = camera.forward;
-            const t = depth / ray.direction.dot(forward);
+            // Get world transform matrix
+            const worldMatrix = this.gsplatEntity.getWorldTransform();
+            const rayOrigin = ray.origin;
+            const rayDirection = ray.direction;
 
-            // world position = ray origin + ray direction * t
-            return ray.origin.clone().add(ray.direction.clone().mulScalar(t));
+            // Dynamically adjust point radius based on camera distance
+            const cameraPos = camera.getPosition();
+            const gsplatPos = this.gsplatEntity.getPosition();
+            const cameraDistance = cameraPos.distance(gsplatPos);
+            const pointRadius = Math.max(0.005, 0.01 * (cameraDistance / 10));
+
+            let closestPoint: Vec3 | null = null;
+            let minDistance = Infinity;
+            let closestIndex = -1;
+
+            // Iterate through all points to find closest intersection
+            // Limit to reasonable number for performance (sample if too many)
+            const maxPointsToCheck = 100000; // Limit to 100k points for performance
+            const step = this.cachedPositions.length > maxPointsToCheck 
+                ? Math.ceil(this.cachedPositions.length / maxPointsToCheck) 
+                : 1;
+
+            for (let i = 0; i < this.cachedPositions.length; i += step) {
+                const localPos = this.cachedPositions[i];
+                
+                // Transform to world space
+                const worldPos = new Vec3();
+                worldMatrix.transformPoint(localPos, worldPos);
+
+                const intersection = findClosestPointOnRay(rayOrigin, rayDirection, worldPos, pointRadius);
+                
+                if (intersection && intersection.distance < minDistance) {
+                    minDistance = intersection.distance;
+                    closestPoint = worldPos.clone();
+                    closestIndex = i;
+                }
+            }
+
+            return closestPoint;
         };
 
         this.release = () => {
-            renderPass?.destroy();
-            renderTarget?.destroy();
-            colorBuffer?.destroy();
+            this.cachedPositions = null;
+            this.positionCacheValid = false;
         };
     }
 }

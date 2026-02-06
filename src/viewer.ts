@@ -360,9 +360,10 @@ class Viewer {
                 isUpdating = true;
                 try {
                     // Use picker to get precise world position under cursor (actual point position, not fixed distance)
+                    // Similar to annotation.html: ray-based point selection without depth buffer
                     if (!picker) {
                         const { Picker } = await import('./picker');
-                        picker = new Picker(app, camera);
+                        picker = new Picker(app, camera, results[0]); // Pass gsplatEntity
                     }
 
                     const worldPos = await picker.pick(x, y);
