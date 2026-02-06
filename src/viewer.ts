@@ -314,8 +314,8 @@ class Viewer {
         // Create centers overlay
         this.centersOverlay = new CentersOverlay(app);
 
-        // Create point marker
-        this.pointMarker = new PointMarker(app, app.scene.root);
+        // Create point marker (scene will be set in attach method)
+        this.pointMarker = new PointMarker(app);
         
         // Create point list UI (will be initialized after DOM is ready)
         this.pointListUI = null as any;
@@ -350,7 +350,8 @@ class Viewer {
                 if (uiContainer) {
                     const pointListContainer = document.createElement('div');
                     pointListContainer.id = 'pointListContainer';
-                    pointListContainer.style.cssText = 'position: fixed; right: 0; top: 0; width: 300px; height: 100vh; z-index: 1000; pointer-events: none;';
+                    // Leave bottom space for settingsPanel (bottom: 86px + padding)
+                    pointListContainer.style.cssText = 'position: fixed; right: 0; top: 0; width: 300px; height: calc(100vh - 200px); z-index: 999; pointer-events: none;';
                     const innerContainer = document.createElement('div');
                     innerContainer.style.cssText = 'pointer-events: auto; height: 100%;';
                     pointListContainer.appendChild(innerContainer);
@@ -472,27 +473,49 @@ class Viewer {
             // Setup click handler for point selection
             const selectModeState = { enabled: false };
             canvas.addEventListener('click', async (e: MouseEvent) => {
-                if (!selectModeState.enabled || !state.showCenters) return;
+                console.log('Canvas clicked, selectModeState.enabled:', selectModeState.enabled, 'state.showCenters:', state.showCenters, 'centersOverlay.isEnabled:', this.centersOverlay.isEnabled);
+                if (!selectModeState.enabled) {
+                    console.log('Click ignored - selectModeState.enabled is false');
+                    return;
+                }
+                if (!state.showCenters || !this.centersOverlay.isEnabled) {
+                    console.log('Click ignored - showCenters or overlay not enabled. showCenters:', state.showCenters, 'overlay.isEnabled:', this.centersOverlay.isEnabled);
+                    // Try to enable it
+                    state.showCenters = true;
+                    this.centersOverlay.setEnabled(true);
+                    events.fire('showCenters:changed', true);
+                    console.log('Auto-enabled showCenters, retrying...');
+                    // Don't return, continue with the click
+                }
                 
+                console.log('Processing point selection...');
                 const rect = canvas.getBoundingClientRect();
                 const x = (e.clientX - rect.left) / rect.width;
                 const y = (e.clientY - rect.top) / rect.height;
+                console.log('Normalized coordinates:', x, y);
 
                 try {
                     if (!picker) {
+                        console.log('Initializing picker...');
                         const { Picker } = await import('./picker');
                         picker = new Picker(app, camera, results[0]);
                     }
 
+                    console.log('Getting closest point...');
                     const result = await picker.getClosestPointIndex(x, y);
+                    console.log('Picker result:', result);
                     if (result && this.pointMarker) {
                         // Get original color (default white)
                         const originalColor = new Color(1, 1, 1);
+                        console.log('Selecting point:', result.index, result.position);
                         this.pointMarker.selectPoint(result.index, result.position, originalColor);
                         app.renderNextFrame = true;
+                        console.log('Point selected successfully');
+                    } else {
+                        console.log('No point found or pointMarker not available');
                     }
                 } catch (error) {
-                    console.debug('Point selection error:', error);
+                    console.error('Point selection error:', error);
                 }
             });
 
@@ -530,18 +553,28 @@ class Viewer {
                     // Toggle select mode button
                     const selectBtn = document.createElement('button');
                     selectBtn.id = 'toggleSelectBtn';
-                    selectBtn.className = 'controlButton toggle';
+                    selectBtn.className = 'controlButton toggle right';
                     selectBtn.title = 'Toggle Point Selection Mode';
                     selectBtn.innerHTML = '📍';
-                    selectBtn.style.cssText = 'font-size: 20px; padding: 8px;';
-                    selectBtn.addEventListener('click', () => {
+                    selectBtn.style.cssText = 'font-size: 20px; padding: 8px; cursor: pointer;';
+                    selectBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        console.log('Toggle button clicked, current state:', selectModeState.enabled);
+                        console.log('Before toggle - state.showCenters:', state.showCenters, 'centersOverlay.isEnabled:', this.centersOverlay.isEnabled);
                         selectModeState.enabled = !selectModeState.enabled;
-                        selectBtn.classList.toggle('active', selectModeState.enabled);
                         if (selectModeState.enabled) {
+                            selectBtn.classList.add('active');
                             state.showCenters = true;
                             this.centersOverlay.setEnabled(true);
                             events.fire('showCenters:changed', true);
+                            console.log('Select mode enabled');
+                            console.log('After toggle - state.showCenters:', state.showCenters, 'centersOverlay.isEnabled:', this.centersOverlay.isEnabled);
+                        } else {
+                            selectBtn.classList.remove('active');
+                            console.log('Select mode disabled');
                         }
+                        console.log('New selectModeState.enabled:', selectModeState.enabled);
                     });
                     buttonsContainer.appendChild(selectBtn);
 

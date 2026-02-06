@@ -1,6 +1,7 @@
 import {
     Color,
     Entity,
+    Mat4,
     Mesh,
     MeshInstance,
     SphereGeometry,
@@ -54,25 +55,28 @@ for (let i = 0; i < MAX_POINTS; i++) {
 export class PointMarker {
     private app: AppBase;
     gsplatEntity: Entity | null = null;
-    private scene: Entity;
+    private scene: Entity | null = null;
     
     selectedPoints: MarkedPoint[] = [];
     private nextColorId = 0;
-    private pointSpheres = new Map<number, { entity: Entity; meshInstance: MeshInstance }>();
+    private pointSpheres = new Map<number, { entity: Entity; meshInstance: MeshInstance; isHovered: boolean }>();
     hoveredListItemIndex: number | null = null;
-    private currentSphereSize = 0.005;
+    private currentSphereSize = 0.01; // Large size for better visibility
     
     // Callbacks
     onPointsChanged?: () => void;
     onHoverChanged?: (index: number | null) => void;
 
-    constructor(app: AppBase, scene: Entity) {
+    constructor(app: AppBase, scene?: Entity) {
         this.app = app;
-        this.scene = scene;
+        this.scene = scene || null;
     }
 
     attach(gsplatEntity: Entity) {
         this.gsplatEntity = gsplatEntity;
+        // Use gsplatEntity as the parent for adding spheres (like CentersOverlay does)
+        this.scene = gsplatEntity;
+        console.log('PointMarker: attach called, scene set to gsplatEntity:', this.scene?.name || 'unnamed', 'scene exists:', !!this.scene);
     }
 
     getPointColor(colorId: number): Color {
@@ -223,7 +227,16 @@ export class PointMarker {
         if (!point) return;
         
         const color = this.getPointColor(colorId);
-        const position = point.position.clone();
+        // Convert world position to local position relative to gsplatEntity
+        let position = point.position.clone();
+        if (this.gsplatEntity) {
+            const worldMatrix = this.gsplatEntity.getWorldTransform();
+            const invWorldMatrix = new Mat4();
+            invWorldMatrix.invert(worldMatrix);
+            const localPos = new Vec3();
+            invWorldMatrix.transformPoint(position, localPos);
+            position = localPos;
+        }
         
         // Determine sphere size
         let sphereSize = this.currentSphereSize;
@@ -233,7 +246,10 @@ export class PointMarker {
         
         let sphereData = this.pointSpheres.get(colorId);
         
-        if (!sphereData || updateSize) {
+        // Check if we need to recreate sphere due to hover state change
+        const needsSizeUpdate = sphereData && (sphereData.isHovered !== hoverSize);
+        
+        if (!sphereData || updateSize || needsSizeUpdate) {
             // Remove old sphere if exists
             if (sphereData && sphereData.entity) {
                 sphereData.entity.destroy();
@@ -249,43 +265,60 @@ export class PointMarker {
             // Create sphere mesh
             const geometry = new SphereGeometry({
                 radius: sphereSize,
-                segments: 16
+                latitudeBands: 16,
+                longitudeBands: 16
             });
             const mesh = Mesh.fromGeometry(this.app.graphicsDevice, geometry);
             
             const entity = new Entity();
             const meshInstance = new MeshInstance(mesh, material);
+
+            // Set render order to render after splats (similar to centers overlay)
+            meshInstance.drawBucket = 300;
+            meshInstance.cull = false;
+
+            // Get the World layer from the scene
+            const worldLayer = this.app.scene.layers.getLayerByName('World');
+
             entity.addComponent('render', {
-                meshInstances: [meshInstance]
+                meshInstances: [meshInstance],
+                layers: worldLayer ? [worldLayer.id] : []
             });
             entity.setPosition(position);
+            // Ensure scene is set (in case attach wasn't called yet)
+            if (!this.scene) {
+                if (this.gsplatEntity) {
+                    this.scene = this.gsplatEntity;
+                    console.log('PointMarker: scene was null, setting to gsplatEntity');
+                } else {
+                    console.error('PointMarker: scene is null and gsplatEntity is also null, cannot add sphere');
+                    return;
+                }
+            }
+            if (!this.scene) {
+                console.error('PointMarker: scene is still null after attempt to set, cannot add sphere');
+                return;
+            }
+            console.log('PointMarker: Creating sphere at position', position, 'colorId:', colorId, 'size:', sphereSize, 'hoverSize:', hoverSize, 'scene:', this.scene.name || 'unnamed');
             this.scene.addChild(entity);
+            console.log('PointMarker: Sphere added, entity children count:', this.scene.children.length);
             
-            sphereData = { entity, meshInstance };
+            sphereData = { entity, meshInstance, isHovered: hoverSize };
             this.pointSpheres.set(colorId, sphereData);
         } else {
-            // Update existing sphere
+            // Update existing sphere (should not reach here if needsSizeUpdate is true)
             if (sphereData.entity) {
+                // Just update position and color
+                // Position is already converted to local coordinates above
                 sphereData.entity.setPosition(position);
-                sphereData.meshInstance.material.diffuse = color;
-                sphereData.meshInstance.material.emissive = color;
-                sphereData.meshInstance.material.update();
-                
-                // Update size if needed
-                if (hoverSize || updateSize) {
-                    // Recreate mesh with new size
-                    const oldMesh = sphereData.meshInstance.mesh;
-                    const geometry = new SphereGeometry({
-                        radius: sphereSize,
-                        segments: 16
-                    });
-                    const newMesh = Mesh.fromGeometry(this.app.graphicsDevice, geometry);
-                    sphereData.meshInstance.mesh = newMesh;
-                    sphereData.entity.render.meshInstances = [sphereData.meshInstance];
-                    if (oldMesh) {
-                        oldMesh.destroy();
-                    }
+                const mat = sphereData.meshInstance.material as StandardMaterial;
+                if (mat) {
+                    mat.diffuse = color;
+                    mat.emissive = color;
+                    mat.update();
                 }
+                // Update hover state
+                sphereData.isHovered = hoverSize;
             }
         }
     }
