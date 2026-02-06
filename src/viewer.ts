@@ -31,6 +31,8 @@ import { nearlyEquals } from './core/math';
 import { InputController } from './input-controller';
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import type { Global } from './types';
+import { CentersOverlay } from './centers-overlay';
+
 
 // override global pick to pack depth instead of meshInstance id
 const pickDepthGlsl = /* glsl */ `
@@ -132,6 +134,8 @@ class Viewer {
 
     annotations: Annotations;
 
+    centersOverlay: CentersOverlay;
+
     forceRenderNextFrame = false;
 
     constructor(global: Global, gsplatLoad: Promise<Entity>, skyboxLoad: Promise<void>) {
@@ -173,19 +177,26 @@ class Viewer {
         graphicsDevice.on('resizecanvas', updateHorizontalFov);
         updateHorizontalFov();
 
-        // handle HQ mode changes
-        const updateHqMode = () => {
+        // handle render mode changes
+        const updateRenderMode = () => {
             // limit the backbuffer to 4k on desktop and HD on mobile
             // we use the shorter dimension so ultra-wide (or high) monitors still work correctly.
             const maxRatio = (platform.mobile ? 1080 : 2160) / Math.min(screen.width, screen.height);
 
-            // half pixel resolution with hq mode disabled
-            graphicsDevice.maxPixelRatio = (state.hqMode ? 1.0 : 0.5) * Math.min(maxRatio, window.devicePixelRatio);
+            // adjust pixel ratio based on render mode
+            // Note: We don't set maxPixelRatio to 0 in 'off' mode to allow centers overlay to render
+            if (state.renderMode === 'high') {
+                // full pixel resolution
+                graphicsDevice.maxPixelRatio = 1.0 * Math.min(maxRatio, window.devicePixelRatio);
+            } else {
+                // half pixel resolution for low quality and off mode
+                graphicsDevice.maxPixelRatio = 0.5 * Math.min(maxRatio, window.devicePixelRatio);
+            }
 
             app.renderNextFrame = true;
         };
-        events.on('hqMode:changed', updateHqMode);
-        updateHqMode();
+        events.on('renderMode:changed', updateRenderMode);
+        updateRenderMode();
 
         // construct debug ministats
         if (config.ministats) {
@@ -242,6 +253,11 @@ class Viewer {
                 prevWorld.copy(world);
                 prevProj.copy(proj);
             }
+
+            // Update centers overlay
+            if (this.centersOverlay) {
+                this.centersOverlay.update();
+            }
         });
 
         const applyCamera = (camera: Camera) => {
@@ -289,9 +305,91 @@ class Viewer {
             state.animationPaused = !!config.noanim;
         });
 
+        // Create centers overlay
+        this.centersOverlay = new CentersOverlay(app);
+
+        // Listen for showCenters state changes
+        events.on('showCenters:changed', (value: boolean) => {
+            this.centersOverlay.setEnabled(value);
+        });
+
+        // Listen for centers point size changes
+        events.on('centersPointSize:changed', (value: number) => {
+            this.centersOverlay.setPointSize(value);
+        });
+
+        // Initialize point size from state
+        this.centersOverlay.setPointSize(state.centersPointSize);
+
+        // Handle mouse move for highlighting centers
+        const canvas = graphicsDevice.canvas;
+        let picker: any = null;
+        let highlightTimeout: number | null = null;
+
+        const updateHighlight = async (x: number, y: number) => {
+            if (!state.showCenters || !this.centersOverlay.isEnabled) {
+                this.centersOverlay.setHighlightedPointId(-1);
+                this.centersOverlay.setHoveredPointPosition(null);
+                return;
+            }
+
+            try {
+                // Use picker to get world position under cursor
+                if (!picker) {
+                    const { Picker } = await import('./picker');
+                    picker = new Picker(app, camera);
+                }
+
+                const worldPos = await picker.pick(x, y);
+                if (!worldPos) {
+                    this.centersOverlay.setHighlightedPointId(-1);
+                    this.centersOverlay.setHoveredPointPosition(null);
+                    return;
+                }
+
+                // Show green sphere at the picked position
+                // The picked position should be on a splat center since we're hovering over points
+                this.centersOverlay.setHoveredPointPosition(worldPos);
+            } catch (error) {
+                // Silently handle errors
+                console.debug('Highlight error:', error);
+                this.centersOverlay.setHoveredPointPosition(null);
+            }
+        };
+
+        canvas.addEventListener('mousemove', (e: MouseEvent) => {
+            if (!state.showCenters) {
+                this.centersOverlay.setHighlightedPointId(-1);
+                this.centersOverlay.setHoveredPointPosition(null);
+                return;
+            }
+
+            const x = e.offsetX / canvas.clientWidth;
+            const y = e.offsetY / canvas.clientHeight;
+
+            // Debounce highlight updates
+            if (highlightTimeout) {
+                clearTimeout(highlightTimeout);
+            }
+            highlightTimeout = window.setTimeout(() => {
+                updateHighlight(x, y);
+            }, 50);
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            if (highlightTimeout) {
+                clearTimeout(highlightTimeout);
+            }
+            this.centersOverlay.setHighlightedPointId(-1);
+            this.centersOverlay.setHoveredPointPosition(null);
+        });
+
         // wait for the model to load
         Promise.all([gsplatLoad, skyboxLoad]).then((results) => {
             const gsplat = results[0].gsplat as GSplatComponent;
+
+            // Attach centers overlay to gsplat entity
+            this.centersOverlay.attach(results[0]);
 
             // get scene bounding box
             const gsplatBbox = gsplat.customAabb;
@@ -312,6 +410,15 @@ class Viewer {
             if (instance) {
                 // kick off gsplat sorting immediately now that camera is in position
                 instance.sort(camera);
+
+                // handle render mode changes for non-LOD splats
+                const updateSplatRendering = () => {
+                    // Enable/disable gsplat component based on render mode
+                    gsplat.enabled = state.renderMode !== 'off';
+                    app.renderNextFrame = true;
+                };
+                events.on('renderMode:changed', updateSplatRendering);
+                updateSplatRendering();
 
                 // listen for sorting updates to trigger first frame events
                 instance.sorter?.on('updated', () => {
@@ -380,7 +487,7 @@ class Viewer {
 
                 let current = 0;
                 let watermark = 1;
-                const readyHandler = (camera: CameraComponent, layer: Layer, ready: boolean, loading: number) => {
+                const readyHandler = (_camera: CameraComponent, _layer: Layer, ready: boolean, loading: number) => {
                     if (ready && loading === 0) {
                         // scene is done loading
                         eventHandler.off('frame:ready', readyHandler);
@@ -389,12 +496,17 @@ class Viewer {
 
                         // handle quality mode changes
                         const updateLod = () => {
-                            const settings = state.hqMode ? quality.high : quality.low;
-                            gsplat.lodRangeMin = settings.range[0];
-                            gsplat.lodRangeMax = settings.range[1];
-                            results[0].gsplat.splatBudget = settings.splatBudget * 1000000;
+                            if (state.renderMode === 'off') {
+                                // disable LOD rendering by setting budget to 0
+                                results[0].gsplat.splatBudget = 0;
+                            } else {
+                                const settings = state.renderMode === 'high' ? quality.high : quality.low;
+                                gsplat.lodRangeMin = settings.range[0];
+                                gsplat.lodRangeMax = settings.range[1];
+                                results[0].gsplat.splatBudget = settings.splatBudget * 1000000;
+                            }
                         };
-                        events.on('hqMode:changed', updateLod);
+                        events.on('renderMode:changed', updateLod);
                         updateLod();
 
                         // debug colorize lods

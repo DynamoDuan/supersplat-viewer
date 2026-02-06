@@ -21,10 +21,12 @@ type Config = {
     aa: boolean;                                // render with antialiasing
 };
 
+type RenderMode = 'high' | 'low' | 'off';
+
 // observable state that can change at runtime
 type State = {
     readyToRender: boolean;                     // don't render till this is set
-    hqMode: boolean;
+    renderMode: RenderMode;
     progress: number;                           // content loading progress 0-100
     inputMode: InputMode;
     cameraMode: CameraMode;
@@ -36,6 +38,8 @@ type State = {
     hasVR: boolean;
     isFullscreen: boolean;
     controlsHidden: boolean;
+    showCenters: boolean;
+    centersPointSize: number;
 };
 
 type Global = {
@@ -47,4 +51,4 @@ type Global = {
     camera: Entity;
 };
 
-export { CameraMode, InputMode, Config, State, Global };
+export { CameraMode, InputMode, RenderMode, Config, State, Global };

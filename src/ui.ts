@@ -37,7 +37,8 @@ const initUI = (global: Global) => {
         'play', 'pause',
         'settings', 'settingsPanel',
         'orbitCamera', 'flyCamera',
-        'hqCheck', 'hqOption', 'lqCheck', 'lqOption',
+        'hqCheck', 'hqOption', 'lqCheck', 'lqOption', 'offCheck', 'offOption',
+        'centersCheck', 'centersOption', 'centersSizeSlider', 'centersSizeValue',
         'reset', 'frame',
         'loadingText', 'loadingBar',
         'joystickBase', 'joystick',
@@ -45,7 +46,9 @@ const initUI = (global: Global) => {
     ].reduce((acc: Record<string, HTMLElement>, id) => {
         acc[id] = document.getElementById(id);
         return acc;
-    }, {});
+    }, {}) as Record<string, HTMLElement> & {
+        centersSizeSlider: HTMLInputElement;
+    };
 
     // Handle loading progress updates
     events.on('progress:changed', (progress) => {
@@ -110,22 +113,26 @@ const initUI = (global: Global) => {
         dom.exitFullscreen.classList[value ? 'remove' : 'add']('hidden');
     });
 
-    // HQ mode
+    // Render mode
     dom.hqOption.addEventListener('click', () => {
-        state.hqMode = true;
+        state.renderMode = 'high';
     });
     dom.lqOption.addEventListener('click', () => {
-        state.hqMode = false;
+        state.renderMode = 'low';
+    });
+    dom.offOption.addEventListener('click', () => {
+        state.renderMode = 'off';
     });
 
-    const updateHQ = () => {
-        dom.hqCheck.classList[state.hqMode ? 'add' : 'remove']('active');
-        dom.lqCheck.classList[state.hqMode ? 'remove' : 'add']('active');
+    const updateRenderMode = () => {
+        dom.hqCheck.classList[state.renderMode === 'high' ? 'add' : 'remove']('active');
+        dom.lqCheck.classList[state.renderMode === 'low' ? 'add' : 'remove']('active');
+        dom.offCheck.classList[state.renderMode === 'off' ? 'add' : 'remove']('active');
     };
-    events.on('hqMode:changed', (value) => {
-        updateHQ();
+    events.on('renderMode:changed', () => {
+        updateRenderMode();
     });
-    updateHQ();
+    updateRenderMode();
 
     // AR/VR
     const arChanged = () => dom.arMode.classList[state.hasAR ? 'remove' : 'add']('hidden');
@@ -209,7 +216,7 @@ const initUI = (global: Global) => {
     events.on('inputEvent', showUI);
 
     // Animation controls
-    events.on('hasAnimation:changed', (value, prev) => {
+    events.on('hasAnimation:changed', () => {
         // Start and Stop animation
         dom.play.addEventListener('click', () => {
             state.cameraMode = 'anim';
@@ -295,6 +302,28 @@ const initUI = (global: Global) => {
 
     dom.settings.addEventListener('click', () => {
         dom.settingsPanel.classList.toggle('hidden');
+    });
+
+    // Centers display toggle
+    dom.centersOption.addEventListener('click', () => {
+        state.showCenters = !state.showCenters;
+    });
+
+    events.on('showCenters:changed', (value: boolean) => {
+        dom.centersCheck.classList[value ? 'add' : 'remove']('active');
+    });
+
+    // Centers point size slider
+    dom.centersSizeSlider.addEventListener('input', (e: Event) => {
+        const value = parseFloat((e.target as HTMLInputElement).value);
+        state.centersPointSize = value;
+        dom.centersSizeValue.textContent = value.toFixed(1);
+        events.fire('centersPointSize:changed', value);
+    });
+
+    events.on('centersPointSize:changed', (value: number) => {
+        dom.centersSizeSlider.value = value.toString();
+        dom.centersSizeValue.textContent = value.toFixed(1);
     });
 
     dom.orbitCamera.addEventListener('click', () => {

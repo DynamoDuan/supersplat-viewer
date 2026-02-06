@@ -88,7 +88,7 @@ const main = (app: AppBase, camera: Entity, settingsJson: any, config: Config) =
 
     const state = observe(events, {
         readyToRender: false,
-        hqMode: true,
+        renderMode: 'high',
         progress: 0,
         inputMode: 'desktop',
         cameraMode: 'orbit',
@@ -99,7 +99,9 @@ const main = (app: AppBase, camera: Entity, settingsJson: any, config: Config) =
         hasAR: false,
         hasVR: false,
         isFullscreen: false,
-        controlsHidden: false
+        controlsHidden: false,
+        showCenters: false,
+        centersPointSize: 5
     });
 
     const global: Global = {
