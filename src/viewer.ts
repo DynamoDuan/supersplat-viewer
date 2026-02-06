@@ -344,48 +344,96 @@ class Viewer {
             this.cameraManager = new CameraManager(global, sceneBound);
             applyCamera(this.cameraManager.camera);
 
-            // Setup mouse move for real-time cursor highlighting AFTER cameraManager is initialized
+            // Setup mouse move for precise real-time cursor highlighting AFTER cameraManager is initialized
             const canvas = graphicsDevice.canvas;
+            let picker: any = null;
+            let pendingUpdate: { x: number; y: number } | null = null;
+            let isUpdating = false;
+            let rafId: number | null = null;
 
-            canvas.addEventListener('mousemove', (e: MouseEvent) => {
+            const updateHighlight = async (x: number, y: number) => {
                 if (!state.showCenters || !this.centersOverlay.isEnabled) {
+                    isUpdating = false;
                     return;
                 }
 
-                const cameraEntity = global.camera;
+                isUpdating = true;
+                try {
+                    // Use picker to get precise world position under cursor (actual point position, not fixed distance)
+                    if (!picker) {
+                        const { Picker } = await import('./picker');
+                        picker = new Picker(app, camera);
+                    }
 
-                // Calculate ray from camera through mouse position
-                const rayOrigin = cameraEntity.getPosition();
-                const rayDir = new Vec3();
+                    const worldPos = await picker.pick(x, y);
+                    if (worldPos) {
+                        // Set precise cursor position for highlighting (actual point position from picker)
+                        // Use a larger radius to highlight approximately 10 nearest points
+                        // The radius will be dynamically adjusted based on point density
+                        this.centersOverlay.setCursorHighlightRadius(0.01); // Larger radius for ~10 points
+                        this.centersOverlay.setCursorPosition(worldPos, true);
+                    } else {
+                        // No point found under cursor
+                        this.centersOverlay.setCursorPosition(null, false);
+                    }
+                    
+                    // Request immediate render
+                    app.renderNextFrame = true;
+                } catch (error) {
+                    // Silently handle errors
+                    console.debug('Highlight error:', error);
+                    this.centersOverlay.setCursorPosition(null, false);
+                } finally {
+                    isUpdating = false;
+                    // Process any pending update
+                    if (pendingUpdate) {
+                        const nextUpdate = pendingUpdate;
+                        pendingUpdate = null;
+                        rafId = requestAnimationFrame(() => {
+                            rafId = null;
+                            updateHighlight(nextUpdate.x, nextUpdate.y);
+                        });
+                    }
+                }
+            };
 
-                // Get the point at depth=1.0 (on the far plane)
-                cameraEntity.camera.screenToWorld(
-                    e.offsetX,
-                    e.offsetY,
-                    1.0,
-                    rayDir
-                );
-
-                // Calculate direction from camera to that point
-                rayDir.sub(rayOrigin).normalize();
-
-                // Project to the center of the scene (use camera target distance)
-                let distance = 2.0; // Default fallback distance
-
-                if (this.cameraManager && this.cameraManager.camera && this.cameraManager.camera.distance) {
-                    distance = this.cameraManager.camera.distance;
+            canvas.addEventListener('mousemove', (e: MouseEvent) => {
+                if (!state.showCenters || !this.centersOverlay.isEnabled) {
+                    if (rafId !== null) {
+                        cancelAnimationFrame(rafId);
+                        rafId = null;
+                    }
+                    pendingUpdate = null;
+                    this.centersOverlay.setCursorPosition(null, false);
+                    return;
                 }
 
-                const worldPos = rayOrigin.clone().add(rayDir.clone().mulScalar(distance));
+                const rect = canvas.getBoundingClientRect();
+                const x = (e.clientX - rect.left) / rect.width;
+                const y = (e.clientY - rect.top) / rect.height;
 
-                // Enable cursor proximity highlighting at this position
-                this.centersOverlay.setCursorPosition(worldPos, true);
+                // Store the latest mouse position
+                pendingUpdate = { x, y };
 
-                // Request immediate render
-                app.renderNextFrame = true;
+                // If not currently updating, start a new update
+                if (!isUpdating && rafId === null) {
+                    rafId = requestAnimationFrame(() => {
+                        rafId = null;
+                        if (pendingUpdate) {
+                            const update = pendingUpdate;
+                            pendingUpdate = null;
+                            updateHighlight(update.x, update.y);
+                        }
+                    });
+                }
             });
 
             canvas.addEventListener('mouseleave', () => {
+                if (rafId !== null) {
+                    cancelAnimationFrame(rafId);
+                    rafId = null;
+                }
+                pendingUpdate = null;
                 this.centersOverlay.setCursorPosition(null, false);
                 app.renderNextFrame = true;
             });

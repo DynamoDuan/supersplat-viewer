@@ -446,13 +446,13 @@ const initUI = (global: Global) => {
     dom.centersSizeSlider.addEventListener('input', (e: Event) => {
         const value = parseFloat((e.target as HTMLInputElement).value);
         state.centersPointSize = value;
-        dom.centersSizeValue.textContent = value.toFixed(1);
+        dom.centersSizeValue.textContent = value.toFixed(2);
         events.fire('centersPointSize:changed', value);
     });
 
     events.on('centersPointSize:changed', (value: number) => {
         dom.centersSizeSlider.value = value.toString();
-        dom.centersSizeValue.textContent = value.toFixed(1);
+        dom.centersSizeValue.textContent = value.toFixed(2);
     });
 
     dom.orbitCamera.addEventListener('click', () => {

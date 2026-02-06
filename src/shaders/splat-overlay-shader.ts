@@ -148,24 +148,27 @@ const vertexShader = /* glsl */ `
                 finalColor = mix(gaussianClr, selectedClr.xyz, 0.3);
             }
 
-            // Proximity-based cursor highlighting (real-time)
+            // Cursor highlighting (real-time) - highlight nearest ~10 points
             // Calculate distance from this point to cursor position
             float distToCursor = 0.0;
             if (cursorHighlightEnabled > 0.5) {
                 vec3 worldPos = (model * vec4(center, 1.0)).xyz;
                 distToCursor = distance(worldPos, cursorPosition);
 
-                // Define two radii: inner (cursor) and outer (neighbor)
-                float innerRadius = cursorHighlightRadius * 0.5;      // Main highlight radius
-                float outerRadius = cursorHighlightRadius;             // Neighbor highlight radius
+                // Use two radii: inner for main highlight, outer for neighbor highlight
+                // This creates a gradient effect highlighting approximately 10 nearest points
+                float innerRadius = cursorHighlightRadius * 0.3;  // Main highlight (closest ~3 points)
+                float outerRadius = cursorHighlightRadius;         // Neighbor highlight (up to ~10 points total)
 
                 if (distToCursor < innerRadius) {
-                    // Point is very close to cursor - use main highlight color
+                    // Point is very close to cursor - use main highlight color (bright green)
                     finalColor = cursorHighlightColor;
                 } else if (distToCursor < outerRadius) {
-                    // Point is in neighbor zone - blend based on distance
+                    // Point is in neighbor zone - blend based on distance (light green gradient)
                     float t = (distToCursor - innerRadius) / (outerRadius - innerRadius);
-                    finalColor = mix(cursorNeighborColor, finalColor, t);
+                    // Blend from highlight color to neighbor color, then fade to original
+                    vec3 neighborBlend = mix(cursorHighlightColor, cursorNeighborColor, 0.5);
+                    finalColor = mix(neighborBlend, finalColor, t);
                 }
             }
 

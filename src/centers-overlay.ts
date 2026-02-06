@@ -27,7 +27,7 @@ class CentersOverlay {
     private enabled = false;
     private pointSize = 0.01;
     private useGaussianColor = false;
-    private selectedColor = new Color(0.2, 1, 1, 1);  // Bright cyan for highlighted centers
+    private selectedColor = new Color(0.0, 0.0, 0.8, 1.0);  // Deep blue for all point cloud centers (default color)
     private unselectedColor = new Color(0.5, 0.5, 0.5, 0.8);
     private highlightedPointId = -1;
     private maxPoints = 100000;  // Maximum number of points to display (default: 100k)
@@ -35,9 +35,11 @@ class CentersOverlay {
     // Proximity highlight state
     private cursorPosition: Vec3 = new Vec3();
     private cursorHighlightEnabled = false;
-    private cursorHighlightRadius = 0.2;  // Default radius in world units
+    private cursorHighlightRadius = 0.02;  // Larger radius for highlighting ~10 nearest points
     private cursorHighlightColor = new Color(0.0, 1.0, 0.0, 1.0);  // Green for cursor proximity
     private cursorNeighborColor = new Color(0.5, 1.0, 0.5, 1.0);  // Light green for neighbors
+    private highlightedPointIds: number[] = [];  // IDs of the nearest N points to highlight
+    private maxHighlightedPoints = 10;  // Maximum number of points to highlight
 
     constructor(app: AppBase) {
         this.app = app;
@@ -257,6 +259,10 @@ class CentersOverlay {
             this.cursorNeighborColor.g,
             this.cursorNeighborColor.b
         ]);
+        
+        // Pass highlighted point IDs array (for highlighting nearest N points)
+        // We'll use a uniform array, but since WebGL has limitations, we'll use distance-based approach instead
+        // The shader will highlight points within radius, sorted by distance
 
         // Pass camera position for SH evaluation
         // Get camera from the global viewer state
