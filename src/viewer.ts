@@ -32,6 +32,8 @@ import { InputController } from './input-controller';
 import type { ExperienceSettings, PostEffectSettings } from './settings';
 import type { Global } from './types';
 import { CentersOverlay } from './centers-overlay';
+import { PointMarker } from './point-marker';
+import { PointListUI } from './point-list-ui';
 
 
 // override global pick to pack depth instead of meshInstance id
@@ -135,6 +137,10 @@ class Viewer {
     annotations: Annotations;
 
     centersOverlay: CentersOverlay;
+
+    pointMarker: PointMarker;
+
+    pointListUI: PointListUI;
 
     forceRenderNextFrame = false;
 
@@ -308,6 +314,12 @@ class Viewer {
         // Create centers overlay
         this.centersOverlay = new CentersOverlay(app);
 
+        // Create point marker
+        this.pointMarker = new PointMarker(app, app.scene.root);
+        
+        // Create point list UI (will be initialized after DOM is ready)
+        this.pointListUI = null as any;
+
         // Listen for showCenters state changes
         events.on('showCenters:changed', (value: boolean) => {
             this.centersOverlay.setEnabled(value);
@@ -328,6 +340,24 @@ class Viewer {
 
             // Attach centers overlay to gsplat entity
             this.centersOverlay.attach(results[0]);
+
+            // Attach point marker to gsplat entity
+            this.pointMarker.attach(results[0]);
+
+            // Initialize point list UI after DOM is ready
+            if (!config.noui && !this.pointListUI) {
+                const uiContainer = document.getElementById('ui');
+                if (uiContainer) {
+                    const pointListContainer = document.createElement('div');
+                    pointListContainer.id = 'pointListContainer';
+                    pointListContainer.style.cssText = 'position: fixed; right: 0; top: 0; width: 300px; height: 100vh; z-index: 1000; pointer-events: none;';
+                    const innerContainer = document.createElement('div');
+                    innerContainer.style.cssText = 'pointer-events: auto; height: 100%;';
+                    pointListContainer.appendChild(innerContainer);
+                    uiContainer.appendChild(pointListContainer);
+                    this.pointListUI = new PointListUI(innerContainer, this.pointMarker);
+                }
+            }
 
             // get scene bounding box
             const gsplatBbox = gsplat.customAabb;
@@ -438,6 +468,206 @@ class Viewer {
                 this.centersOverlay.setCursorPosition(null, false);
                 app.renderNextFrame = true;
             });
+
+            // Setup click handler for point selection
+            const selectModeState = { enabled: false };
+            canvas.addEventListener('click', async (e: MouseEvent) => {
+                if (!selectModeState.enabled || !state.showCenters) return;
+                
+                const rect = canvas.getBoundingClientRect();
+                const x = (e.clientX - rect.left) / rect.width;
+                const y = (e.clientY - rect.top) / rect.height;
+
+                try {
+                    if (!picker) {
+                        const { Picker } = await import('./picker');
+                        picker = new Picker(app, camera, results[0]);
+                    }
+
+                    const result = await picker.getClosestPointIndex(x, y);
+                    if (result && this.pointMarker) {
+                        // Get original color (default white)
+                        const originalColor = new Color(1, 1, 1);
+                        this.pointMarker.selectPoint(result.index, result.position, originalColor);
+                        app.renderNextFrame = true;
+                    }
+                } catch (error) {
+                    console.debug('Point selection error:', error);
+                }
+            });
+
+            // Setup keyboard shortcuts and UI buttons for point marking
+            if (!config.noui) {
+                // Add UI buttons
+                const buttonsContainer = document.getElementById('buttonsContainer');
+                if (buttonsContainer) {
+                    // Save JSON button
+                    const saveBtn = document.createElement('button');
+                    saveBtn.id = 'savePointsBtn';
+                    saveBtn.className = 'controlButton';
+                    saveBtn.title = 'Save Points as JSON';
+                    saveBtn.innerHTML = '💾';
+                    saveBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    saveBtn.addEventListener('click', () => {
+                        const jsonData = this.pointMarker.exportToJSON();
+                        if (jsonData.length === 0) {
+                            alert('No points selected');
+                            return;
+                        }
+                        const jsonString = JSON.stringify(jsonData, null, 2);
+                        const blob = new Blob([jsonString], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        link.href = url;
+                        link.download = `points_${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                        URL.revokeObjectURL(url);
+                    });
+                    buttonsContainer.appendChild(saveBtn);
+
+                    // Toggle select mode button
+                    const selectBtn = document.createElement('button');
+                    selectBtn.id = 'toggleSelectBtn';
+                    selectBtn.className = 'controlButton toggle';
+                    selectBtn.title = 'Toggle Point Selection Mode';
+                    selectBtn.innerHTML = '📍';
+                    selectBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    selectBtn.addEventListener('click', () => {
+                        selectModeState.enabled = !selectModeState.enabled;
+                        selectBtn.classList.toggle('active', selectModeState.enabled);
+                        if (selectModeState.enabled) {
+                            state.showCenters = true;
+                            this.centersOverlay.setEnabled(true);
+                            events.fire('showCenters:changed', true);
+                        }
+                    });
+                    buttonsContainer.appendChild(selectBtn);
+
+                    // Delete last point button
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.id = 'deleteLastPointBtn';
+                    deleteBtn.className = 'controlButton';
+                    deleteBtn.title = 'Delete Last Point';
+                    deleteBtn.innerHTML = '⌫';
+                    deleteBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    deleteBtn.addEventListener('click', () => {
+                        this.pointMarker.deleteLastPoint();
+                        app.renderNextFrame = true;
+                    });
+                    buttonsContainer.appendChild(deleteBtn);
+
+                    // Clear all button
+                    const clearBtn = document.createElement('button');
+                    clearBtn.id = 'clearAllPointsBtn';
+                    clearBtn.className = 'controlButton';
+                    clearBtn.title = 'Clear All Points';
+                    clearBtn.innerHTML = '🗑️';
+                    clearBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    clearBtn.addEventListener('click', () => {
+                        if (confirm('Clear all marked points?')) {
+                            this.pointMarker.clearAll();
+                            app.renderNextFrame = true;
+                        }
+                    });
+                    buttonsContainer.appendChild(clearBtn);
+
+                    // Load JSON button (hidden file input)
+                    const loadInput = document.createElement('input');
+                    loadInput.type = 'file';
+                    loadInput.accept = '.json';
+                    loadInput.style.display = 'none';
+                    loadInput.addEventListener('change', async (e) => {
+                        const file = (e.target as HTMLInputElement).files?.[0];
+                        if (!file) return;
+
+                        try {
+                            const text = await file.text();
+                            const jsonData = JSON.parse(text);
+                            
+                            if (!Array.isArray(jsonData)) {
+                                alert('Invalid JSON format. Expected array of [x, y, z] arrays.');
+                                return;
+                            }
+
+                            // Find points callback - find closest point in point cloud
+                            const findPointCallback = async (x: number, y: number, z: number) => {
+                                if (!picker || !results[0]) {
+                                    const { Picker } = await import('./picker');
+                                    picker = new Picker(app, camera, results[0]);
+                                }
+
+                                // Access picker's cached positions to find closest point
+                                const targetPos = new Vec3(x, y, z);
+                                
+                                // Wait for positions to be loaded
+                                if (!picker.positionCacheValid) {
+                                    // Wait a bit for async loading
+                                    await new Promise(resolve => setTimeout(resolve, 500));
+                                }
+                                
+                                if (!picker.cachedPositions || picker.cachedPositions.length === 0) {
+                                    return null;
+                                }
+
+                                const gsplat = results[0].gsplat as GSplatComponent;
+                                if (!gsplat) return null;
+
+                                const worldMatrix = results[0].getWorldTransform();
+                                let closestIndex = -1;
+                                let minDistance = Infinity;
+                                let closestPosition: Vec3 | null = null;
+
+                                // Search through cached positions
+                                const maxPointsToCheck = 100000;
+                                const step = picker.cachedPositions.length > maxPointsToCheck 
+                                    ? Math.ceil(picker.cachedPositions.length / maxPointsToCheck) 
+                                    : 1;
+
+                                for (let i = 0; i < picker.cachedPositions.length; i += step) {
+                                    const localPos = picker.cachedPositions[i];
+                                    const worldPos = new Vec3();
+                                    worldMatrix.transformPoint(localPos, worldPos);
+                                    
+                                    const distance = worldPos.distance(targetPos);
+                                    if (distance < minDistance) {
+                                        minDistance = distance;
+                                        closestIndex = i;
+                                        closestPosition = worldPos;
+                                    }
+                                }
+
+                                if (closestIndex >= 0 && closestPosition && minDistance <= 0.001) {
+                                    return {
+                                        index: closestIndex,
+                                        position: closestPosition,
+                                        color: new Color(1, 1, 1)
+                                    };
+                                }
+
+                                return null;
+                            };
+
+                            const loadedCount = await this.pointMarker.importFromJSON(jsonData, findPointCallback);
+                            alert(`Loaded ${loadedCount} of ${jsonData.length} points`);
+                            app.renderNextFrame = true;
+                        } catch (error) {
+                            alert(`Failed to load JSON: ${error}`);
+                        }
+                    });
+                    document.body.appendChild(loadInput);
+
+                    const loadBtn = document.createElement('button');
+                    loadBtn.id = 'loadPointsBtn';
+                    loadBtn.className = 'controlButton';
+                    loadBtn.title = 'Load Points from JSON';
+                    loadBtn.innerHTML = '📂';
+                    loadBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    loadBtn.addEventListener('click', () => loadInput.click());
+                    buttonsContainer.appendChild(loadBtn);
+                }
+            }
 
             const { instance } = gsplat;
             if (instance) {

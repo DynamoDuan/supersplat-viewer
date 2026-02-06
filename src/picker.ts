@@ -72,12 +72,12 @@ const findClosestPointOnRay = (rayOrigin: Vec3, rayDirection: Vec3, pointPositio
 
 class Picker {
     pick: (x: number, y: number) => Promise<Vec3 | null>;
-
+    getClosestPointIndex: (x: number, y: number) => Promise<{ index: number; position: Vec3 } | null>;
     release: () => void;
 
     private gsplatEntity: Entity | null = null;
-    private cachedPositions: Vec3[] | null = null;
-    private positionCacheValid = false;
+    cachedPositions: Vec3[] | null = null;
+    positionCacheValid = false;
 
     constructor(app: AppBase, camera: Entity, gsplatEntity?: Entity) {
         this.gsplatEntity = gsplatEntity || null;
@@ -220,6 +220,80 @@ class Picker {
             }
 
             return closestPoint;
+        };
+
+        // Get the index of the closest point (for point selection)
+        // This returns both the world position and the point index
+        this.getClosestPointIndex = async (x: number, y: number): Promise<{ index: number; position: Vec3 } | null> => {
+            if (!this.gsplatEntity) {
+                return null;
+            }
+
+            // Ensure positions are loaded
+            if (!this.positionCacheValid) {
+                await loadPositions();
+            }
+
+            if (!this.cachedPositions || this.cachedPositions.length === 0) {
+                return null;
+            }
+
+            const gsplat = this.gsplatEntity.gsplat as GSplatComponent;
+            if (!gsplat) {
+                return null;
+            }
+
+            const { graphicsDevice } = app;
+
+            // Get ray from camera through screen point
+            getRay(camera,
+                Math.floor(x * graphicsDevice.canvas.offsetWidth),
+                Math.floor(y * graphicsDevice.canvas.offsetHeight),
+                ray
+            );
+
+            // Get world transform matrix
+            const worldMatrix = this.gsplatEntity.getWorldTransform();
+            const rayOrigin = ray.origin;
+            const rayDirection = ray.direction;
+
+            // Dynamically adjust point radius based on camera distance
+            const cameraPos = camera.getPosition();
+            const gsplatPos = this.gsplatEntity.getPosition();
+            const cameraDistance = cameraPos.distance(gsplatPos);
+            const pointRadius = Math.max(0.005, 0.01 * (cameraDistance / 10));
+
+            let closestPoint: Vec3 | null = null;
+            let minDistance = Infinity;
+            let closestIndex = -1;
+
+            // Iterate through all points to find closest intersection
+            const maxPointsToCheck = 100000;
+            const step = this.cachedPositions.length > maxPointsToCheck 
+                ? Math.ceil(this.cachedPositions.length / maxPointsToCheck) 
+                : 1;
+
+            for (let i = 0; i < this.cachedPositions.length; i += step) {
+                const localPos = this.cachedPositions[i];
+                
+                // Transform to world space
+                const worldPos = new Vec3();
+                worldMatrix.transformPoint(localPos, worldPos);
+
+                const intersection = findClosestPointOnRay(rayOrigin, rayDirection, worldPos, pointRadius);
+                
+                if (intersection && intersection.distance < minDistance) {
+                    minDistance = intersection.distance;
+                    closestPoint = worldPos.clone();
+                    closestIndex = i;
+                }
+            }
+
+            if (closestIndex >= 0 && closestPoint) {
+                return { index: closestIndex, position: closestPoint };
+            }
+
+            return null;
         };
 
         this.release = () => {
