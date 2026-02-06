@@ -1,6 +1,5 @@
 import {
     math,
-    DualGestureSource,
     GamepadSource,
     InputFrame,
     KeyboardMouseSource,
@@ -77,6 +76,28 @@ const screenToWorld = (camera: CameraComponent, dx: number, dy: number, dz: numb
     return out;
 };
 
+// patch keydown and keyup to ignore events with meta key otherwise
+// keys can get stuck on macOS.
+const patchKeyboardMeta = (desktopInput: any) => {
+    const origOnKeyDown = desktopInput._onKeyDown;
+    desktopInput._onKeyDown = (event: KeyboardEvent) => {
+        if (event.key === 'Meta') {
+            desktopInput._keyNow.fill(0);
+        } else if (!event.metaKey) {
+            origOnKeyDown(event);
+        }
+    };
+
+    const origOnKeyUp = desktopInput._onKeyUp;
+    desktopInput._onKeyUp = (event: KeyboardEvent) => {
+        if (event.key === 'Meta') {
+            desktopInput._keyNow.fill(0);
+        } else if (!event.metaKey) {
+            origOnKeyUp(event);
+        }
+    };
+};
+
 class InputController {
     private _state = {
         axis: new Vec3(),
@@ -90,8 +111,6 @@ class InputController {
 
     private _orbitInput = new MultiTouchSource();
 
-    private _flyInput = new DualGestureSource();
-
     private _gamepadInput = new GamepadSource();
 
     global: Global;
@@ -101,10 +120,10 @@ class InputController {
         rotate: [0, 0, 0]
     });
 
-    joystick: {
-        base: [number, number] | null,
-        stick: [number, number] | null
-    } = { base: null, stick: null };
+    // Touch joystick input values (-1 to 1)
+    private _touchJoystickX: number = 0; // negative = left, positive = right
+
+    private _touchJoystickY: number = 0; // negative = forward, positive = backward
 
     // this gets overridden by the viewer based on scene size
     moveSpeed: number = 4;
@@ -119,19 +138,15 @@ class InputController {
         const { app, camera, events, state } = global;
         const canvas = app.graphicsDevice.canvas as HTMLCanvasElement;
 
+        patchKeyboardMeta(this._desktopInput);
+
         this._desktopInput.attach(canvas);
         this._orbitInput.attach(canvas);
-        this._flyInput.attach(canvas);
 
-        // convert events to joystick state
-        this._flyInput.on('joystick:position:left', ([bx, by, sx, sy]) => {
-            if (bx < 0 || by < 0 || sx < 0 || sy < 0) {
-                this.joystick.base = null;
-                this.joystick.stick = null;
-                return;
-            }
-            this.joystick.base = [bx, by];
-            this.joystick.stick = [sx - bx, sy - by];
+        // Listen for joystick input from the UI (touch joystick element)
+        events.on('joystickInput', (value: { x: number; y: number }) => {
+            this._touchJoystickX = value.x;
+            this._touchJoystickY = value.y;
         });
 
         this.global = global;
@@ -219,10 +234,9 @@ class InputController {
 
         const { key, button, mouse, wheel } = this._desktopInput.read();
         const { touch, pinch, count } = this._orbitInput.read();
-        const { leftInput, rightInput } = this._flyInput.read();
         const { leftStick, rightStick } = this._gamepadInput.read();
 
-        const { events, state } = this.global;
+        const { state } = this.global;
         const { camera } = this.global.camera;
 
         // update state
@@ -272,7 +286,8 @@ class InputController {
         v.set(0, 0, 0);
         const orbitMove = screenToWorld(camera, touch[0], touch[1], distance);
         v.add(orbitMove.mulScalar(orbit * pan));
-        flyMove.set(leftInput[0], 0, -leftInput[1]);
+        // Use touch joystick values for fly movement (X = strafe, Y = forward/backward)
+        flyMove.set(this._touchJoystickX, 0, -this._touchJoystickY);
         v.add(flyMove.mulScalar(fly * this.moveSpeed * dt));
         pinchMove.set(0, 0, pinch[0]);
         v.add(pinchMove.mulScalar(orbit * double * this.pinchSpeed * dt));
@@ -282,8 +297,11 @@ class InputController {
         v.set(0, 0, 0);
         orbitRotate.set(touch[0], touch[1], 0);
         v.add(orbitRotate.mulScalar(orbit * (1 - pan) * this.orbitSpeed * dt));
-        flyRotate.set(rightInput[0], rightInput[1], 0);
-        v.add(flyRotate.mulScalar(fly * this.orbitSpeed * orbitFactor * dt));
+        // In fly mode, use any touch for look-around (joystick captures its own touches)
+        // Exclude multi-touch (double) to avoid interference with pinch gestures
+        // 1.25x sensitivity for touch look-around
+        flyRotate.set(touch[0], touch[1], 0);
+        v.add(flyRotate.mulScalar(fly * (1 - double) * this.orbitSpeed * orbitFactor * 1.25 * dt));
         deltas.rotate.append([v.x, v.y, v.z]);
 
         // gamepad move
@@ -297,11 +315,6 @@ class InputController {
         stickRotate.set(rightStick[0], rightStick[1], 0);
         v.add(stickRotate.mulScalar(this.orbitSpeed * orbitFactor * dt));
         deltas.rotate.append([v.x, v.y, v.z]);
-
-        // update touch joystick UI
-        if (state.cameraMode === 'fly') {
-            events.fire('touchJoystickUpdate', this.joystick.base, this.joystick.stick);
-        }
     }
 }
 

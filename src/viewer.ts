@@ -445,33 +445,19 @@ class Viewer {
                 // quality ranges
                 const ranges = {
                     mobile: {
-                        low: {
-                            range: [2, 8],
-                            splatBudget: 1
-                        },
-                        high: {
-                            range: [1, 8],
-                            splatBudget: 2
-                        }
+                        low: 1,
+                        high: 2
                     },
                     desktop: {
-                        low: {
-                            range: [1, 8],
-                            splatBudget: 3
-                        },
-                        high: {
-                            range: [0, 8],
-                            splatBudget: 6
-                        }
+                        low: 3,
+                        high: 6
                     }
                 };
 
                 const quality = platform.mobile ? ranges.mobile : ranges.desktop;
 
                 // start in low quality mode so we can get user interacting asap
-                gsplat.lodRangeMin = quality.low.range[0];
-                gsplat.lodRangeMax = quality.low.range[1];
-                results[0].gsplat.splatBudget = quality.low.splatBudget * 1000000;
+                results[0].gsplat.splatBudget = quality.low * 1000000;
 
                 // these two allow LOD behind camera to drop, saves lots of splats
                 gsplat.lodUpdateAngle = 90;
