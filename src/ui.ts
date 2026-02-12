@@ -485,9 +485,38 @@ const initUI = (global: Global) => {
     // Depth filter slider
     dom.depthFilterSlider.addEventListener('input', (e: Event) => {
         const value = parseFloat((e.target as HTMLInputElement).value);
-        dom.depthFilterValue.textContent = value.toFixed(3);
+        dom.depthFilterValue.textContent = value.toFixed(4);
         events.fire('depthFilter:changed', value);
     });
+
+    // Keyboard control for depth filter slider (arrow keys and +/- keys)
+    dom.depthFilterSlider.addEventListener('keydown', (e: KeyboardEvent) => {
+        const slider = e.target as HTMLInputElement;
+        const currentValue = parseFloat(slider.value);
+        const min = parseFloat(slider.min);
+        const max = parseFloat(slider.max);
+        const step = 0.001; // Keyboard step size
+        let newValue = currentValue;
+
+        // Handle arrow keys and +/- keys
+        if (e.key === 'ArrowUp' || e.key === 'ArrowRight' || e.key === '+' || e.key === '=') {
+            e.preventDefault();
+            newValue = Math.min(currentValue + step, max);
+        } else if (e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === '-') {
+            e.preventDefault();
+            newValue = Math.max(currentValue - step, min);
+        } else {
+            return; // Not a key we handle
+        }
+
+        // Update slider value
+        slider.value = newValue.toFixed(4);
+        dom.depthFilterValue.textContent = newValue.toFixed(4);
+        events.fire('depthFilter:changed', newValue);
+    });
+
+    // Make slider focusable for keyboard control
+    dom.depthFilterSlider.setAttribute('tabindex', '0');
 
     // Update depth filter checkmark when state changes
     events.on('depthFilterEnabled:changed', (value: boolean) => {
