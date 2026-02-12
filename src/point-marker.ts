@@ -260,6 +260,9 @@ export class PointMarker {
             material.diffuse = color;
             material.emissive = color;
             material.emissiveIntensity = 0.5;
+            // Enable depth test to render above Gaussian splats but respect depth
+            material.depthTest = true;
+            material.depthWrite = true;
             material.update();
             
             // Create sphere mesh
@@ -273,8 +276,10 @@ export class PointMarker {
             const entity = new Entity();
             const meshInstance = new MeshInstance(mesh, material);
 
-            // Set render order to render after splats (similar to centers overlay)
-            meshInstance.drawBucket = 300;
+            // Set render order: render after Gaussian splats but before point cloud overlay
+            // Gaussian splats render at default bucket (0), point cloud overlay at 300
+            // So we use a value between them (e.g., 50) to render above splats but below overlay
+            meshInstance.drawBucket = 50;
             meshInstance.cull = false;
 
             // Get the World layer from the scene

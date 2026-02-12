@@ -159,6 +159,10 @@
                     <div id="offCheck" class="checkMark">✓</div>
                     <div id="offOption">No Render</div>
                 </div>
+                <div class="settingsRow">
+                    <div id="depthCheck" class="checkMark">✓</div>
+                    <div id="depthOption">Depth View</div>
+                </div>
                 <div class="divider"></div>
                 <div class="settingsRow">
                     <div id="centersCheck" class="checkMark">✓</div>
@@ -168,6 +172,36 @@
                     <label for="centersSizeSlider" style="flex: 1; margin-right: 10px;">Point Size</label>
                     <input type="range" id="centersSizeSlider" min="0.8" max="1.2" step="0.01" value="1.0" style="flex: 2;">
                     <span id="centersSizeValue" style="min-width: 50px; text-align: right;">1.0</span>
+                </div>
+                <div class="settingsRow">
+                    <div id="depthFilterCheck" class="checkMark">✓</div>
+                    <div id="depthFilterOption">Depth Filter</div>
+                </div>
+                <div class="settingsRow">
+                    <label for="depthFilterSlider" style="flex: 1; margin-right: 10px;">Depth Range</label>
+                    <input type="range" id="depthFilterSlider" min="-0.01" max="0.01" step="0.0001" value="0.002" style="flex: 2;">
+                    <span id="depthFilterValue" style="min-width: 50px; text-align: right;">0.0020</span>
+                </div>
+                <div class="settingsRow">
+                    <div id="showFilteredCheck" class="checkMark">✓</div>
+                    <div id="showFilteredOption">Show Filtered Points</div>
+                </div>
+                <div class="settingsRow">
+                    <div id="freezeFilterCheck" class="checkMark">✓</div>
+                    <div id="freezeFilterOption">Freeze Filtered Points</div>
+                </div>
+                <div class="settingsRow">
+                    <div id="showDepthVizCheck" class="checkMark">✓</div>
+                    <div id="showDepthVizOption">Show Depth Visualization</div>
+                </div>
+                <div class="settingsRow">
+                    <div id="freezeDepthCheck" class="checkMark">✓</div>
+                    <div id="freezeDepthOption">Freeze Depth</div>
+                </div>
+                <div class="settingsRow" id="filterStatsRow" style="display: none; padding: 5px 10px; font-size: 12px; color: #888;">
+                    <div style="flex: 1;">Total: <span id="filterStatsTotal">0</span></div>
+                    <div style="flex: 1;">Visible: <span id="filterStatsVisible" style="color: #0f0;">0</span></div>
+                    <div style="flex: 1;">Filtered: <span id="filterStatsFiltered" style="color: #f00;">0</span></div>
                 </div>
                 <div class="divider"></div>
                 <div class="settingsRow">

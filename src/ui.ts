@@ -166,8 +166,13 @@ const initUI = (global: Global) => {
         'play', 'pause',
         'settings', 'settingsPanel',
         'orbitCamera', 'flyCamera',
-        'hqCheck', 'hqOption', 'lqCheck', 'lqOption', 'offCheck', 'offOption',
+        'hqCheck', 'hqOption', 'lqCheck', 'lqOption', 'offCheck', 'offOption', 'depthCheck', 'depthOption',
+        'showFilteredCheck', 'showFilteredOption', 'filterStatsRow', 'filterStatsTotal', 'filterStatsVisible', 'filterStatsFiltered',
+        'freezeFilterCheck', 'freezeFilterOption',
+        'showDepthVizCheck', 'showDepthVizOption',
+        'freezeDepthCheck', 'freezeDepthOption',
         'centersCheck', 'centersOption', 'centersSizeSlider', 'centersSizeValue',
+        'depthFilterCheck', 'depthFilterOption', 'depthFilterSlider', 'depthFilterValue',
         'reset', 'frame',
         'loadingText', 'loadingBar',
         'joystickBase', 'joystick',
@@ -177,6 +182,19 @@ const initUI = (global: Global) => {
         return acc;
     }, {}) as Record<string, HTMLElement> & {
         centersSizeSlider: HTMLInputElement;
+        depthFilterSlider: HTMLInputElement;
+        showFilteredCheck: HTMLElement;
+        showFilteredOption: HTMLElement;
+        showDepthVizCheck: HTMLElement;
+        showDepthVizOption: HTMLElement;
+        freezeDepthCheck: HTMLElement;
+        freezeDepthOption: HTMLElement;
+        freezeFilterCheck: HTMLElement;
+        freezeFilterOption: HTMLElement;
+        filterStatsRow: HTMLElement;
+        filterStatsTotal: HTMLElement;
+        filterStatsVisible: HTMLElement;
+        filterStatsFiltered: HTMLElement;
     };
 
     // Handle loading progress updates
@@ -252,11 +270,15 @@ const initUI = (global: Global) => {
     dom.offOption.addEventListener('click', () => {
         state.renderMode = 'off';
     });
+    dom.depthOption.addEventListener('click', () => {
+        state.renderMode = 'depth';
+    });
 
     const updateRenderMode = () => {
         dom.hqCheck.classList[state.renderMode === 'high' ? 'add' : 'remove']('active');
         dom.lqCheck.classList[state.renderMode === 'low' ? 'add' : 'remove']('active');
         dom.offCheck.classList[state.renderMode === 'off' ? 'add' : 'remove']('active');
+        dom.depthCheck.classList[state.renderMode === 'depth' ? 'add' : 'remove']('active');
     };
     events.on('renderMode:changed', () => {
         updateRenderMode();
@@ -453,6 +475,70 @@ const initUI = (global: Global) => {
     events.on('centersPointSize:changed', (value: number) => {
         dom.centersSizeSlider.value = value.toString();
         dom.centersSizeValue.textContent = value.toFixed(2);
+    });
+
+    // Depth filter toggle
+    dom.depthFilterOption.addEventListener('click', () => {
+        events.fire('depthFilter:toggle');
+    });
+
+    // Depth filter slider
+    dom.depthFilterSlider.addEventListener('input', (e: Event) => {
+        const value = parseFloat((e.target as HTMLInputElement).value);
+        dom.depthFilterValue.textContent = value.toFixed(3);
+        events.fire('depthFilter:changed', value);
+    });
+
+    // Update depth filter checkmark when state changes
+    events.on('depthFilterEnabled:changed', (value: boolean) => {
+        dom.depthFilterCheck.classList[value ? 'add' : 'remove']('active');
+    });
+
+    // Show filtered points toggle
+    dom.showFilteredOption.addEventListener('click', () => {
+        events.fire('showFilteredPoints:toggle');
+    });
+
+    // Update show filtered points checkmark when state changes
+    events.on('showFilteredPoints:changed', (value: boolean) => {
+        dom.showFilteredCheck.classList[value ? 'add' : 'remove']('active');
+        dom.filterStatsRow.style.display = value ? 'flex' : 'none';
+    });
+
+    // Show depth visualization toggle
+    dom.showDepthVizOption.addEventListener('click', () => {
+        events.fire('showDepthVisualization:toggle');
+    });
+
+    // Update show depth visualization checkmark when state changes
+    events.on('showDepthVisualization:changed', (value: boolean) => {
+        dom.showDepthVizCheck.classList[value ? 'add' : 'remove']('active');
+    });
+
+    // Freeze depth toggle
+    dom.freezeDepthOption.addEventListener('click', () => {
+        events.fire('freezeDepth:toggle');
+    });
+
+    // Update freeze depth checkmark when state changes
+    events.on('freezeDepth:changed', (value: boolean) => {
+        dom.freezeDepthCheck.classList[value ? 'add' : 'remove']('active');
+    });
+
+    // Freeze filter toggle
+    dom.freezeFilterOption.addEventListener('click', () => {
+        events.fire('freezeFilter:toggle');
+    });
+
+    events.on('freezeFilter:changed', (value: boolean) => {
+        dom.freezeFilterCheck.classList[value ? 'add' : 'remove']('active');
+    });
+
+    // Update filter statistics
+    events.on('filterStats:changed', (stats: { total: number; visible: number; filtered: number }) => {
+        dom.filterStatsTotal.textContent = stats.total.toLocaleString();
+        dom.filterStatsVisible.textContent = stats.visible.toLocaleString();
+        dom.filterStatsFiltered.textContent = stats.filtered.toLocaleString();
     });
 
     dom.orbitCamera.addEventListener('click', () => {

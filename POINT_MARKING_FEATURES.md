@@ -160,3 +160,4 @@ function loadJSONFromURL(url: string): Promise<void>
 - 行 1584-1760: updateAnnotationsList 函数
 - 行 1537-1582: reorderPoints 函数
 
+

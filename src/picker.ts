@@ -22,6 +22,20 @@ const uintBitsToFloat = (bits: number): number => {
     return view.getFloat32(0, true);
 };
 
+// Convert IEEE 754 half-precision float (uint16) to float32
+const halfToFloat = (h: number): number => {
+    const sign = (h >> 15) & 0x1;
+    const exponent = (h >> 10) & 0x1f;
+    const mantissa = h & 0x3ff;
+    if (exponent === 0) {
+        // subnormal
+        return (sign ? -1 : 1) * Math.pow(2, -14) * (mantissa / 1024);
+    } else if (exponent === 31) {
+        return mantissa ? NaN : (sign ? -Infinity : Infinity);
+    }
+    return (sign ? -1 : 1) * Math.pow(2, exponent - 15) * (1 + mantissa / 1024);
+};
+
 // get the normalized world-space ray starting at the camera position
 // facing the supplied screen position
 // works for both perspective and orthographic cameras
@@ -77,6 +91,7 @@ class Picker {
 
     private gsplatEntity: Entity | null = null;
     cachedPositions: Vec3[] | null = null;
+    cachedOpacities: Float32Array | null = null;
     positionCacheValid = false;
 
     constructor(app: AppBase, camera: Entity, gsplatEntity?: Entity) {
@@ -106,8 +121,8 @@ class Picker {
             // Read position texture data from GPU
             // Note: Reading from GPU texture is expensive, so we cache the result
             try {
-                const { graphicsDevice } = app;
-                
+        const { graphicsDevice } = app;
+
                 // Create a render target to read from the texture
                 const renderTarget = new RenderTarget({
                     colorBuffer: posTexture,
@@ -137,6 +152,30 @@ class Picker {
                 renderTarget.destroy();
 
                 this.cachedPositions = positions;
+
+                // Read opacity from colorTexture (RGBA16F: alpha channel = opacity)
+                const colorTexture = (resource as any).colorTexture;
+                if (colorTexture) {
+                    try {
+                        const colorRT = new RenderTarget({
+                            colorBuffer: colorTexture,
+                            depth: false
+                        });
+                        const colorPixels = await colorTexture.read(0, 0, colorTexture.width, colorTexture.height, { renderTarget: colorRT });
+                        const opacities = new Float32Array(numSplats);
+                        for (let i = 0; i < numSplats && i < colorTexture.width * colorTexture.height; i++) {
+                            const pixelIdx = i * 4;
+                            // RGBA16F → Uint16Array, alpha is index 3
+                            opacities[i] = halfToFloat((colorPixels as Uint16Array)[pixelIdx + 3]);
+                        }
+                        colorRT.destroy();
+                        this.cachedOpacities = opacities;
+                    } catch (e) {
+                        console.warn('Failed to read color texture for opacity:', e);
+                        this.cachedOpacities = null;
+                    }
+                }
+
                 this.positionCacheValid = true;
             } catch (error) {
                 console.warn('Failed to read position texture (ray-based picking may be unavailable):', error);
@@ -298,6 +337,7 @@ class Picker {
 
         this.release = () => {
             this.cachedPositions = null;
+            this.cachedOpacities = null;
             this.positionCacheValid = false;
         };
     }

@@ -3,7 +3,10 @@
 
 const vertexShader = /* glsl */ `
     uniform mat4 matrix_model;
+    uniform mat4 matrix_view;
     uniform mat4 matrix_viewProjection;
+
+    uniform float depthFilterEnabled;
 
     uniform highp usampler2D splatOrder;            // order texture mapping render order to splat ID
     uniform uint splatTextureSize;                  // width of order texture
@@ -40,8 +43,15 @@ const vertexShader = /* glsl */ `
     uniform float cursorHighlightEnabled;           // Enable/disable cursor highlighting (0.0 = off, 1.0 = on)
     uniform vec3 cursorHighlightColor;              // Color for points near cursor
     uniform vec3 cursorNeighborColor;               // Color for neighbor points (further away)
+    uniform sampler2D depthFilterState;              // CPU-computed filter state per splat
+    uniform sampler2D depthVisualization;             // Depth values for visualization
+    uniform float showDepthVisualization;             // Enable depth color-coding
+    uniform float depthMin;                           // Minimum depth for normalization
+    uniform float depthMax;                           // Maximum depth for normalization
 
     varying vec4 varying_color;
+    varying float varying_wouldBeFiltered;
+    varying float varying_depth;                      // Depth value for visualization
 
     // calculate the current splat index and uv
     ivec2 calcSplatUV(uint index, uint width) {
@@ -180,10 +190,28 @@ const vertexShader = /* glsl */ `
                 // Bright yellow highlight (only when cursor highlighting is off)
                 finalColor = mix(finalColor, vec3(1.0, 0.9, 0.0), 0.7);
             }
-            
+
             varying_color = vec4(finalColor, unselectedClr.w);
 
+            // Read CPU-computed filter state
+            varying_wouldBeFiltered = 0.0;
+            if (depthFilterEnabled > 0.5) {
+                varying_wouldBeFiltered = texelFetch(depthFilterState, splatUV, 0).r;
+            }
+
+            // Read depth value for visualization (always initialize to 0)
+            varying_depth = 0.0;
+            // Only read depth texture if visualization is explicitly enabled AND depth range is valid
+            if (showDepthVisualization > 0.5) {
+                if (depthMax > depthMin && depthMax > 0.0) {
+                    // PIXELFORMAT_R8_G8_B8_A8 is normalized: sampler returns [0,1] already
+                    float normalizedDepth = texelFetch(depthVisualization, splatUV, 0).r;
+                    varying_depth = depthMin + normalizedDepth * (depthMax - depthMin);
+                }
+            }
+
             gl_Position = matrix_viewProjection * model * vec4(center, 1.0);
+
             // Make highlighted point larger
             float pointSize = splatSize;
             if (isHighlighted) {
@@ -195,13 +223,56 @@ const vertexShader = /* glsl */ `
 `;
 
 const fragmentShader = /* glsl */ `
+    uniform float depthFilterEnabled;
+    uniform float showFilteredPoints;
+    uniform vec3 filteredPointColor;
+    uniform float showDepthVisualization;
+    uniform float depthMin;
+    uniform float depthMax;
+
     varying vec4 varying_color;
+    varying float varying_wouldBeFiltered;
+    varying float varying_depth;
+
+    // Depth colormap: blue (near) -> cyan -> green -> yellow -> red (far)
+    vec3 depthColormap(float t) {
+        t = clamp(t, 0.0, 1.0);
+        if (t < 0.25) {
+            float s = t / 0.25;
+            return mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 1.0), s);
+        } else if (t < 0.5) {
+            float s = (t - 0.25) / 0.25;
+            return mix(vec3(0.0, 1.0, 1.0), vec3(0.0, 1.0, 0.0), s);
+        } else if (t < 0.75) {
+            float s = (t - 0.5) / 0.25;
+            return mix(vec3(0.0, 1.0, 0.0), vec3(1.0, 1.0, 0.0), s);
+        } else {
+            float s = (t - 0.75) / 0.25;
+            return mix(vec3(1.0, 1.0, 0.0), vec3(1.0, 0.0, 0.0), s);
+        }
+    }
 
     void main(void) {
-        gl_FragColor = varying_color;
+        vec4 color = varying_color;
+
+        // Apply depth visualization if enabled and depth is valid
+        if (showDepthVisualization > 0.5 && varying_depth > 0.0 && depthMax > depthMin && depthMax > 0.0) {
+            float normalizedDepth = (varying_depth - depthMin) / (depthMax - depthMin + 1e-10);
+            normalizedDepth = clamp(normalizedDepth, 0.0, 1.0);
+            vec3 depthColor = depthColormap(normalizedDepth);
+            color = vec4(depthColor, varying_color.a);
+        }
+
+        if (depthFilterEnabled > 0.5 && varying_wouldBeFiltered > 0.5) {
+            if (showFilteredPoints > 0.5) {
+                color = vec4(filteredPointColor, varying_color.a * 0.5);
+            } else {
+                discard;
+            }
+        }
+
+        gl_FragColor = color;
     }
 `;
 
 export { vertexShader, fragmentShader };
-
-

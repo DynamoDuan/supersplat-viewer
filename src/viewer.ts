@@ -34,6 +34,7 @@ import type { Global } from './types';
 import { CentersOverlay } from './centers-overlay';
 import { PointMarker } from './point-marker';
 import { PointListUI } from './point-list-ui';
+import { depthGsplatVS, depthGsplatVS_WGSL } from './shaders/depth-shader';
 
 
 // override global pick to pack depth instead of meshInstance id
@@ -157,10 +158,12 @@ class Viewer {
         const glsl = ShaderChunks.get(graphicsDevice, 'glsl');
         glsl.set('skyboxPS', glsl.get('skyboxPS').replace('mapRoughnessUv(uv, mipLevel)', 'uv'));
         glsl.set('pickPS', pickDepthGlsl);
+        glsl.set('gsplatVS', depthGsplatVS);
 
         const wgsl = ShaderChunks.get(graphicsDevice, 'wgsl');
         wgsl.set('skyboxPS', wgsl.get('skyboxPS').replace('mapRoughnessUv(uv, uniform.mipLevel)', 'uv'));
         wgsl.set('pickPS', pickDepthWgsl);
+        wgsl.set('gsplatVS', depthGsplatVS_WGSL);
 
         // disable auto render, we'll render only when camera changes
         app.autoRender = false;
@@ -191,7 +194,7 @@ class Viewer {
 
             // adjust pixel ratio based on render mode
             // Note: We don't set maxPixelRatio to 0 in 'off' mode to allow centers overlay to render
-            if (state.renderMode === 'high') {
+            if (state.renderMode === 'high' || state.renderMode === 'depth') {
                 // full pixel resolution
                 graphicsDevice.maxPixelRatio = 1.0 * Math.min(maxRatio, window.devicePixelRatio);
             } else {
@@ -331,6 +334,145 @@ class Viewer {
             this.centersOverlay.setPointSize(value);
         });
 
+        // Depth filter
+        let depthFilterEnabled = false;
+        let filterComputeTimeout: ReturnType<typeof setTimeout> | null = null;
+
+        const updateFilterStats = () => {
+            const stats = this.centersOverlay.getFilterStats();
+            events.fire('filterStats:changed', stats);
+        };
+
+        // Debounced filter computation - runs after camera stops moving
+        const scheduleFilterComputation = () => {
+            if (filterComputeTimeout) clearTimeout(filterComputeTimeout);
+            filterComputeTimeout = setTimeout(async () => {
+                filterComputeTimeout = null;
+                if (!depthFilterEnabled) return;
+
+                // Get picker positions (picker is initialized in Promise.all below)
+                const pickerRef = (this as any)._picker;
+                if (!pickerRef) return;
+
+                // Wait for positions to be loaded
+                if (!pickerRef.positionCacheValid) {
+                    await new Promise<void>(r => setTimeout(r, 500));
+                    if (!pickerRef.positionCacheValid) return;
+                }
+
+                const positions = pickerRef.cachedPositions;
+                if (!positions || positions.length === 0) return;
+
+                this.centersOverlay.computeFiltering(positions, camera, pickerRef.cachedOpacities);
+                updateFilterStats();
+                app.renderNextFrame = true;
+            }, 300);
+        };
+
+        events.on('depthFilter:toggle', () => {
+            depthFilterEnabled = !depthFilterEnabled;
+            this.centersOverlay.setDepthFilterEnabled(depthFilterEnabled);
+            events.fire('depthFilterEnabled:changed', depthFilterEnabled);
+            if (depthFilterEnabled) {
+                scheduleFilterComputation();
+            } else {
+                this.centersOverlay.clearFilterState();
+                updateFilterStats();
+            }
+            app.renderNextFrame = true;
+        });
+        events.on('depthFilter:changed', (value: number) => {
+            this.centersOverlay.setDepthThreshold(value);
+            if (depthFilterEnabled) {
+                scheduleFilterComputation();
+            }
+            app.renderNextFrame = true;
+        });
+
+        // Show filtered points toggle
+        let showFilteredPoints = false;
+        events.on('showFilteredPoints:toggle', () => {
+            showFilteredPoints = !showFilteredPoints;
+            this.centersOverlay.setShowFilteredPoints(showFilteredPoints);
+            events.fire('showFilteredPoints:changed', showFilteredPoints);
+            app.renderNextFrame = true;
+        });
+
+        // Show depth visualization toggle
+        let showDepthVisualization = false;
+        events.on('showDepthVisualization:toggle', () => {
+            showDepthVisualization = !showDepthVisualization;
+            this.centersOverlay.setShowDepthVisualization(showDepthVisualization);
+            events.fire('showDepthVisualization:changed', showDepthVisualization);
+            app.renderNextFrame = true;
+        });
+
+        // Freeze depth toggle - back-project alpha-blended depth as a 3D point cloud
+        let depthFrozen = false;
+        events.on('freezeDepth:toggle', async () => {
+            depthFrozen = !depthFrozen;
+            if (depthFrozen) {
+                const pickerRef = (this as any)._picker;
+                if (pickerRef && pickerRef.positionCacheValid && pickerRef.cachedPositions) {
+                    this.centersOverlay.freezeDepth(pickerRef.cachedPositions, camera, pickerRef.cachedOpacities);
+                }
+            } else {
+                this.centersOverlay.unfreezeDepth();
+            }
+            events.fire('freezeDepth:changed', depthFrozen);
+            app.renderNextFrame = true;
+        });
+
+        // Freeze filter toggle - back-project filtered points as a 3D red point cloud
+        let filterFrozen = false;
+        events.on('freezeFilter:toggle', () => {
+            filterFrozen = !filterFrozen;
+            if (filterFrozen) {
+                const pickerRef = (this as any)._picker;
+                if (pickerRef && pickerRef.positionCacheValid && pickerRef.cachedPositions) {
+                    this.centersOverlay.freezeFilter(pickerRef.cachedPositions);
+                }
+            } else {
+                this.centersOverlay.unfreezeFilter();
+            }
+            events.fire('freezeFilter:changed', filterFrozen);
+            app.renderNextFrame = true;
+        });
+
+        // Recompute filter when camera moves (debounced)
+        // Also recompute depth visualization if enabled
+        let lastCameraData: Float32Array | null = null;
+        app.on('framerender', () => {
+            if (!depthFilterEnabled && !showDepthVisualization) return;
+            const world = camera.getWorldTransform();
+            if (!lastCameraData) {
+                lastCameraData = new Float32Array(world.data);
+                scheduleFilterComputation();
+            } else {
+                let changed = false;
+                for (let i = 0; i < 16; i++) {
+                    if (Math.abs(world.data[i] - lastCameraData[i]) > 1e-6) {
+                        changed = true;
+                        break;
+                    }
+                }
+                if (changed) {
+                    lastCameraData.set(world.data);
+                    if (!depthFrozen) {
+                        scheduleFilterComputation();
+                    }
+
+                    // Also update depth visualization if enabled (but NOT if frozen)
+                    if (showDepthVisualization && !depthFrozen) {
+                        const pickerRef = (this as any)._picker;
+                        if (pickerRef && pickerRef.positionCacheValid && pickerRef.cachedPositions) {
+                            this.centersOverlay.computeDepthVisualization(pickerRef.cachedPositions, camera, pickerRef.cachedOpacities);
+                        }
+                    }
+                }
+            }
+        });
+
         // Initialize point size from state
         this.centersOverlay.setPointSize(state.centersPointSize);
 
@@ -340,6 +482,18 @@ class Viewer {
 
             // Attach centers overlay to gsplat entity
             this.centersOverlay.attach(results[0]);
+
+            // Initialize picker eagerly for depth filtering and point selection
+            import('./picker').then(({ Picker }) => {
+                const pickerInstance = new Picker(app, camera, results[0]);
+                (this as any)._picker = pickerInstance;
+            });
+
+            // Update filter statistics after gsplat loads
+            setTimeout(() => {
+                const stats = this.centersOverlay.getFilterStats();
+                events.fire('filterStats:changed', stats);
+            }, 500);
 
             // Attach point marker to gsplat entity
             this.pointMarker.attach(results[0]);
@@ -377,7 +531,7 @@ class Viewer {
 
             // Setup mouse move for precise real-time cursor highlighting AFTER cameraManager is initialized
             const canvas = graphicsDevice.canvas;
-            let picker: any = null;
+            let picker: any = (this as any)._picker || null;
             let pendingUpdate: { x: number; y: number } | null = null;
             let isUpdating = false;
             let rafId: number | null = null;
@@ -393,8 +547,12 @@ class Viewer {
                     // Use picker to get precise world position under cursor (actual point position, not fixed distance)
                     // Similar to annotation.html: ray-based point selection without depth buffer
                     if (!picker) {
+                        picker = (this as any)._picker;
+                    }
+                    if (!picker) {
                         const { Picker } = await import('./picker');
-                        picker = new Picker(app, camera, results[0]); // Pass gsplatEntity
+                        picker = new Picker(app, camera, results[0]);
+                        (this as any)._picker = picker;
                     }
 
                     const worldPos = await picker.pick(x, y);
@@ -496,9 +654,13 @@ class Viewer {
 
                 try {
                     if (!picker) {
+                        picker = (this as any)._picker;
+                    }
+                    if (!picker) {
                         console.log('Initializing picker...');
                         const { Picker } = await import('./picker');
                         picker = new Picker(app, camera, results[0]);
+                        (this as any)._picker = picker;
                     }
 
                     console.log('Getting closest point...');
@@ -707,10 +869,20 @@ class Viewer {
                 // kick off gsplat sorting immediately now that camera is in position
                 instance.sort(camera);
 
+                // get the gsplat material for depth viz toggling
+                const gsplatMaterial = gsplat.unified ? app.scene.gsplat.material : gsplat.material;
+
                 // handle render mode changes for non-LOD splats
                 const updateSplatRendering = () => {
                     // Enable/disable gsplat component based on render mode
                     gsplat.enabled = state.renderMode !== 'off';
+
+                    // toggle depth visualization define on the material
+                    if (gsplatMaterial) {
+                        gsplatMaterial.setDefine('GSPLAT_DEPTH_VIZ', state.renderMode === 'depth');
+                        gsplatMaterial.update();
+                    }
+
                     app.renderNextFrame = true;
                 };
                 events.on('renderMode:changed', updateSplatRendering);
@@ -776,14 +948,23 @@ class Viewer {
 
                         state.readyToRender = true;
 
+                        // get the LOD gsplat material for depth viz toggling
+                        const lodMaterial = gsplat.material;
+
                         // handle quality mode changes
                         const updateLod = () => {
                             if (state.renderMode === 'off') {
                                 // disable LOD rendering by setting budget to 0
                                 results[0].gsplat.splatBudget = 0;
                             } else {
-                                const splatBudget = state.renderMode === 'high' ? quality.high : quality.low;
+                                const splatBudget = (state.renderMode === 'high' || state.renderMode === 'depth') ? quality.high : quality.low;
                                 results[0].gsplat.splatBudget = splatBudget * 1000000;
+                            }
+
+                            // toggle depth visualization define on the material
+                            if (lodMaterial) {
+                                lodMaterial.setDefine('GSPLAT_DEPTH_VIZ', state.renderMode === 'depth');
+                                lodMaterial.update();
                             }
                         };
                         events.on('renderMode:changed', updateLod);

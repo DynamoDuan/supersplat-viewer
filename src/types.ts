@@ -21,7 +21,7 @@ type Config = {
     aa: boolean;                                // render with antialiasing
 };
 
-type RenderMode = 'high' | 'low' | 'off';
+type RenderMode = 'high' | 'low' | 'off' | 'depth';
 
 // observable state that can change at runtime
 type State = {
