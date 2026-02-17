@@ -199,8 +199,13 @@ export class PointListUI {
             deleteBtn.className = 'delete-btn';
             deleteBtn.innerHTML = '×';
             deleteBtn.title = 'Delete this point';
+            deleteBtn.draggable = false;
+            deleteBtn.addEventListener('mousedown', (e) => {
+                e.stopPropagation(); // prevent parent's dragstart
+            });
             deleteBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                e.preventDefault();
                 this.pointMarker.deletePointByIndex(idx);
             });
             

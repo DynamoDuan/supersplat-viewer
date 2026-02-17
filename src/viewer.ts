@@ -34,6 +34,9 @@ import type { Global } from './types';
 import { CentersOverlay } from './centers-overlay';
 import { PointMarker } from './point-marker';
 import { PointListUI } from './point-list-ui';
+import { NormalMarker } from './normal-marker';
+import { NormalListUI } from './normal-list-ui';
+import { computePCANormalFromPoints, computeCentroid } from './pca-normal';
 import { depthGsplatVS, depthGsplatVS_WGSL } from './shaders/depth-shader';
 
 
@@ -142,6 +145,10 @@ class Viewer {
     pointMarker: PointMarker;
 
     pointListUI: PointListUI;
+
+    normalMarker: NormalMarker;
+
+    normalListUI: NormalListUI;
 
     forceRenderNextFrame = false;
 
@@ -319,9 +326,13 @@ class Viewer {
 
         // Create point marker (scene will be set in attach method)
         this.pointMarker = new PointMarker(app);
-        
+
+        // Create normal marker
+        this.normalMarker = new NormalMarker(app);
+
         // Create point list UI (will be initialized after DOM is ready)
         this.pointListUI = null as any;
+        this.normalListUI = null as any;
 
         // Listen for showCenters state changes
         events.on('showCenters:changed', (value: boolean) => {
@@ -498,11 +509,16 @@ class Viewer {
             // Attach point marker to gsplat entity
             this.pointMarker.attach(results[0]);
 
+            // Attach normal marker to gsplat entity
+            this.normalMarker.attach(results[0]);
+
             // Initialize point list UI after DOM is ready
+            let pointListContainer: HTMLElement | null = null;
+            let normalListContainer: HTMLElement | null = null;
             if (!config.noui && !this.pointListUI) {
                 const uiContainer = document.getElementById('ui');
                 if (uiContainer) {
-                    const pointListContainer = document.createElement('div');
+                    pointListContainer = document.createElement('div');
                     pointListContainer.id = 'pointListContainer';
                     // Leave bottom space for settingsPanel (bottom: 86px + padding)
                     pointListContainer.style.cssText = 'position: fixed; right: 0; top: 0; width: 300px; height: calc(100vh - 200px); z-index: 999; pointer-events: none;';
@@ -511,6 +527,16 @@ class Viewer {
                     pointListContainer.appendChild(innerContainer);
                     uiContainer.appendChild(pointListContainer);
                     this.pointListUI = new PointListUI(innerContainer, this.pointMarker);
+
+                    // Create normal list container (hidden by default)
+                    normalListContainer = document.createElement('div');
+                    normalListContainer.id = 'normalListContainer';
+                    normalListContainer.style.cssText = 'position: fixed; right: 0; top: 0; width: 300px; height: calc(100vh - 200px); z-index: 999; pointer-events: none; display: none;';
+                    const normalInner = document.createElement('div');
+                    normalInner.style.cssText = 'pointer-events: auto; height: 100%;';
+                    normalListContainer.appendChild(normalInner);
+                    uiContainer.appendChild(normalListContainer);
+                    this.normalListUI = new NormalListUI(normalInner, this.normalMarker);
                 }
             }
 
@@ -630,51 +656,46 @@ class Viewer {
 
             // Setup click handler for point selection
             const selectModeState = { enabled: false };
+            const annotationMode = { isNormal: false };
             canvas.addEventListener('click', async (e: MouseEvent) => {
-                console.log('Canvas clicked, selectModeState.enabled:', selectModeState.enabled, 'state.showCenters:', state.showCenters, 'centersOverlay.isEnabled:', this.centersOverlay.isEnabled);
+                // Ignore clicks that originated from UI elements overlaying the canvas
+                if (e.target !== canvas) {
+                    return;
+                }
                 if (!selectModeState.enabled) {
-                    console.log('Click ignored - selectModeState.enabled is false');
                     return;
                 }
                 if (!state.showCenters || !this.centersOverlay.isEnabled) {
-                    console.log('Click ignored - showCenters or overlay not enabled. showCenters:', state.showCenters, 'overlay.isEnabled:', this.centersOverlay.isEnabled);
-                    // Try to enable it
                     state.showCenters = true;
                     this.centersOverlay.setEnabled(true);
                     events.fire('showCenters:changed', true);
-                    console.log('Auto-enabled showCenters, retrying...');
-                    // Don't return, continue with the click
                 }
-                
-                console.log('Processing point selection...');
+
                 const rect = canvas.getBoundingClientRect();
                 const x = (e.clientX - rect.left) / rect.width;
                 const y = (e.clientY - rect.top) / rect.height;
-                console.log('Normalized coordinates:', x, y);
 
                 try {
                     if (!picker) {
                         picker = (this as any)._picker;
                     }
                     if (!picker) {
-                        console.log('Initializing picker...');
                         const { Picker } = await import('./picker');
                         picker = new Picker(app, camera, results[0]);
                         (this as any)._picker = picker;
                     }
 
-                    console.log('Getting closest point...');
                     const result = await picker.getClosestPointIndex(x, y);
-                    console.log('Picker result:', result);
-                    if (result && this.pointMarker) {
-                        // Get original color (default white)
-                        const originalColor = new Color(1, 1, 1);
-                        console.log('Selecting point:', result.index, result.position);
-                        this.pointMarker.selectPoint(result.index, result.position, originalColor);
+                    if (result) {
+                        if (annotationMode.isNormal) {
+                            // Normal mode: add green point
+                            this.normalMarker.addPoint(result.index, result.position);
+                        } else {
+                            // Regular mode: colored point
+                            const originalColor = new Color(1, 1, 1);
+                            this.pointMarker.selectPoint(result.index, result.position, originalColor);
+                        }
                         app.renderNextFrame = true;
-                        console.log('Point selected successfully');
-                    } else {
-                        console.log('No point found or pointMarker not available');
                     }
                 } catch (error) {
                     console.error('Point selection error:', error);
@@ -694,12 +715,26 @@ class Viewer {
                     saveBtn.innerHTML = '💾';
                     saveBtn.style.cssText = 'font-size: 20px; padding: 8px;';
                     saveBtn.addEventListener('click', () => {
-                        const jsonData = this.pointMarker.exportToJSON();
-                        if (jsonData.length === 0) {
+                        const pointsData = this.pointMarker.exportToJSON();
+                        const normalData = this.normalMarker.exportToJSON();
+                        const hasNormalData = normalData.points.length > 0 || normalData.normal !== null;
+
+                        if (pointsData.length === 0 && !hasNormalData) {
                             alert('No points selected');
                             return;
                         }
-                        const jsonString = JSON.stringify(jsonData, null, 2);
+
+                        let exportData: any;
+                        if (hasNormalData) {
+                            exportData = {
+                                points: pointsData,
+                                normal_direction: normalData
+                            };
+                        } else {
+                            exportData = pointsData;
+                        }
+
+                        const jsonString = JSON.stringify(exportData, null, 2);
                         const blob = new Blob([jsonString], { type: 'application/json' });
                         const url = URL.createObjectURL(blob);
                         const link = document.createElement('a');
@@ -722,23 +757,86 @@ class Viewer {
                     selectBtn.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        console.log('Toggle button clicked, current state:', selectModeState.enabled);
-                        console.log('Before toggle - state.showCenters:', state.showCenters, 'centersOverlay.isEnabled:', this.centersOverlay.isEnabled);
                         selectModeState.enabled = !selectModeState.enabled;
                         if (selectModeState.enabled) {
                             selectBtn.classList.add('active');
                             state.showCenters = true;
                             this.centersOverlay.setEnabled(true);
                             events.fire('showCenters:changed', true);
-                            console.log('Select mode enabled');
-                            console.log('After toggle - state.showCenters:', state.showCenters, 'centersOverlay.isEnabled:', this.centersOverlay.isEnabled);
                         } else {
                             selectBtn.classList.remove('active');
-                            console.log('Select mode disabled');
                         }
-                        console.log('New selectModeState.enabled:', selectModeState.enabled);
                     });
                     buttonsContainer.appendChild(selectBtn);
+
+                    // Normal Direction toggle button
+                    const normalBtn = document.createElement('button');
+                    normalBtn.id = 'toggleNormalBtn';
+                    normalBtn.className = 'controlButton';
+                    normalBtn.title = 'Toggle Normal Direction Mode';
+                    normalBtn.innerHTML = '&#x2197;'; // ↗ arrow
+                    normalBtn.style.cssText = 'font-size: 20px; padding: 8px; cursor: pointer;';
+                    normalBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        annotationMode.isNormal = !annotationMode.isNormal;
+                        if (annotationMode.isNormal) {
+                            normalBtn.classList.add('active');
+                            normalBtn.style.background = '#007acc';
+                            normalBtn.style.color = '#fff';
+                            // Switch panels
+                            if (pointListContainer) pointListContainer.style.display = 'none';
+                            if (normalListContainer) normalListContainer.style.display = '';
+                            // Hide regular spheres, show normal spheres
+                            this.pointMarker.setAllSpheresVisible(false);
+                            this.normalMarker.show();
+                        } else {
+                            normalBtn.classList.remove('active');
+                            normalBtn.style.background = '';
+                            normalBtn.style.color = '';
+                            // Switch panels back
+                            if (pointListContainer) pointListContainer.style.display = '';
+                            if (normalListContainer) normalListContainer.style.display = 'none';
+                            // Show regular spheres, hide normal spheres
+                            this.pointMarker.setAllSpheresVisible(true);
+                            this.normalMarker.hide();
+                        }
+                        app.renderNextFrame = true;
+                    });
+                    buttonsContainer.appendChild(normalBtn);
+
+                    // Wire compute button in normalListUI
+                    if (this.normalListUI) {
+                        this.normalListUI.onComputeClick = () => {
+                            const normalPoints = this.normalMarker.points;
+                            if (normalPoints.length < 3) {
+                                alert('Select at least 3 points to compute normal');
+                                return;
+                            }
+
+                            if (!picker) {
+                                picker = (this as any)._picker;
+                            }
+                            if (!picker || !picker.cachedPositions || picker.cachedPositions.length === 0) {
+                                alert('Point cloud data not loaded yet');
+                                return;
+                            }
+
+                            const indices = normalPoints.map(p => p.index);
+                            const worldMatrix = results[0].getWorldTransform();
+                            const normal = computePCANormalFromPoints(indices, picker.cachedPositions, worldMatrix);
+
+                            if (normal) {
+                                // Compute centroid of selected points
+                                const centroid = computeCentroid(normalPoints.map(p => p.position));
+                                this.normalMarker.setComputedNormal(normal, centroid);
+                                this.normalListUI.showNormalResult(normal);
+                            } else {
+                                alert('Failed to compute normal. Try selecting more spread-out points.');
+                            }
+                            app.renderNextFrame = true;
+                        };
+                    }
 
                     // Delete last point button
                     const deleteBtn = document.createElement('button');
@@ -763,6 +861,8 @@ class Viewer {
                     clearBtn.addEventListener('click', () => {
                         if (confirm('Clear all marked points?')) {
                             this.pointMarker.clearAll();
+                            this.normalMarker.clearAll();
+                            if (this.normalListUI) this.normalListUI.clearResult();
                             app.renderNextFrame = true;
                         }
                     });
@@ -780,11 +880,6 @@ class Viewer {
                         try {
                             const text = await file.text();
                             const jsonData = JSON.parse(text);
-                            
-                            if (!Array.isArray(jsonData)) {
-                                alert('Invalid JSON format. Expected array of [x, y, z] arrays.');
-                                return;
-                            }
 
                             // Find points callback - find closest point in point cloud
                             const findPointCallback = async (x: number, y: number, z: number) => {
@@ -793,15 +888,12 @@ class Viewer {
                                     picker = new Picker(app, camera, results[0]);
                                 }
 
-                                // Access picker's cached positions to find closest point
                                 const targetPos = new Vec3(x, y, z);
-                                
-                                // Wait for positions to be loaded
+
                                 if (!picker.positionCacheValid) {
-                                    // Wait a bit for async loading
                                     await new Promise(resolve => setTimeout(resolve, 500));
                                 }
-                                
+
                                 if (!picker.cachedPositions || picker.cachedPositions.length === 0) {
                                     return null;
                                 }
@@ -814,17 +906,16 @@ class Viewer {
                                 let minDistance = Infinity;
                                 let closestPosition: Vec3 | null = null;
 
-                                // Search through cached positions
                                 const maxPointsToCheck = 100000;
-                                const step = picker.cachedPositions.length > maxPointsToCheck 
-                                    ? Math.ceil(picker.cachedPositions.length / maxPointsToCheck) 
+                                const step = picker.cachedPositions.length > maxPointsToCheck
+                                    ? Math.ceil(picker.cachedPositions.length / maxPointsToCheck)
                                     : 1;
 
                                 for (let i = 0; i < picker.cachedPositions.length; i += step) {
                                     const localPos = picker.cachedPositions[i];
                                     const worldPos = new Vec3();
                                     worldMatrix.transformPoint(localPos, worldPos);
-                                    
+
                                     const distance = worldPos.distance(targetPos);
                                     if (distance < minDistance) {
                                         minDistance = distance;
@@ -844,8 +935,46 @@ class Viewer {
                                 return null;
                             };
 
-                            const loadedCount = await this.pointMarker.importFromJSON(jsonData, findPointCallback);
-                            alert(`Loaded ${loadedCount} of ${jsonData.length} points`);
+                            if (Array.isArray(jsonData)) {
+                                // Old format: plain array of [x,y,z]
+                                const loadedCount = await this.pointMarker.importFromJSON(jsonData, findPointCallback);
+                                alert(`Loaded ${loadedCount} of ${jsonData.length} points`);
+                            } else if (jsonData && typeof jsonData === 'object') {
+                                // New format: { points: [...], normal_direction: {...} }
+                                if (jsonData.points && Array.isArray(jsonData.points)) {
+                                    const loadedCount = await this.pointMarker.importFromJSON(jsonData.points, findPointCallback);
+                                    console.log(`Loaded ${loadedCount} regular points`);
+                                }
+                                if (jsonData.normal_direction) {
+                                    const nd = jsonData.normal_direction;
+                                    this.normalMarker.clearAll();
+                                    if (nd.points && Array.isArray(nd.points)) {
+                                        for (const pt of nd.points) {
+                                            if (Array.isArray(pt) && pt.length >= 3) {
+                                                // Find the closest point in the cloud
+                                                const result = await findPointCallback(pt[0], pt[1], pt[2]);
+                                                if (result) {
+                                                    this.normalMarker.addPoint(result.index, result.position);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (nd.normal && nd.centroid) {
+                                        const normal = new Vec3(nd.normal[0], nd.normal[1], nd.normal[2]);
+                                        const centroid = new Vec3(nd.centroid[0], nd.centroid[1], nd.centroid[2]);
+                                        this.normalMarker.setComputedNormal(normal, centroid);
+                                        if (this.normalListUI) {
+                                            this.normalListUI.showNormalResult(normal);
+                                        }
+                                    }
+                                    const totalLoaded = (jsonData.points?.length || 0) + (nd.points?.length || 0);
+                                    alert(`Loaded points and normal direction data`);
+                                } else {
+                                    alert('Invalid JSON format');
+                                }
+                            } else {
+                                alert('Invalid JSON format');
+                            }
                             app.renderNextFrame = true;
                         } catch (error) {
                             alert(`Failed to load JSON: ${error}`);

@@ -115,6 +115,7 @@ export class PointMarker {
 
         this.selectedPoints.push(point);
         this.createOrUpdateSphere(colorId);
+        this.app.renderNextFrame = true;
         this.onPointsChanged?.();
         return true;
     }
@@ -134,15 +135,13 @@ export class PointMarker {
             this.setHoveredListItem(this.hoveredListItemIndex - 1);
         }
         
-        // Remove sphere
+        // Remove only this one sphere
         this.removeSphere(colorIdToDelete);
-        
+
         // Remove from array
         this.selectedPoints.splice(arrayIndex, 1);
-        
-        // Recreate spheres for remaining points
-        this.updateAllSpheres();
-        
+
+        this.app.renderNextFrame = true;
         this.onPointsChanged?.();
         return true;
     }
@@ -164,6 +163,7 @@ export class PointMarker {
         this.selectedPoints = [];
         this.nextColorId = 0;
         this.setHoveredListItem(null);
+        this.app.renderNextFrame = true;
         this.onPointsChanged?.();
     }
 
@@ -181,20 +181,19 @@ export class PointMarker {
         
         const [movedItem] = this.selectedPoints.splice(fromIndex, 1);
         this.selectedPoints.splice(targetIndex, 0, movedItem);
-        
-        // Update hovered index if needed
+
+        // Update hovered index if needed (only adjust list index, don't touch spheres)
         if (this.hoveredListItemIndex !== null) {
             if (this.hoveredListItemIndex === fromIndex) {
-                this.setHoveredListItem(targetIndex);
+                this.hoveredListItemIndex = targetIndex;
             } else if (this.hoveredListItemIndex > fromIndex && this.hoveredListItemIndex <= targetIndex) {
-                this.setHoveredListItem(this.hoveredListItemIndex - 1);
+                this.hoveredListItemIndex = this.hoveredListItemIndex - 1;
             } else if (this.hoveredListItemIndex < fromIndex && this.hoveredListItemIndex >= targetIndex) {
-                this.setHoveredListItem(this.hoveredListItemIndex + 1);
+                this.hoveredListItemIndex = this.hoveredListItemIndex + 1;
             }
         }
-        
-        // Recreate all spheres
-        this.updateAllSpheres();
+
+        // Only update the UI list, don't touch any spheres
         this.onPointsChanged?.();
     }
 
@@ -213,13 +212,15 @@ export class PointMarker {
             const point = this.selectedPoints[index];
             this.createOrUpdateSphere(point.colorId, false, true);
         }
-        
+
+        this.app.renderNextFrame = true;
         this.onHoverChanged?.(index);
     }
 
     setSphereSize(size: number): void {
         this.currentSphereSize = size;
         this.updateAllSpheres();
+        this.app.renderNextFrame = true;
     }
 
     private createOrUpdateSphere(colorId: number, updateSize = false, hoverSize = false): void {
@@ -389,6 +390,11 @@ export class PointMarker {
         }
         
         return loadedCount;
+    }
+
+    setAllSpheresVisible(visible: boolean): void {
+        this.pointSpheres.forEach((s) => { if (s.entity) s.entity.enabled = visible; });
+        this.app.renderNextFrame = true;
     }
 
     destroy(): void {
