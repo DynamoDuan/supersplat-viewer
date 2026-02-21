@@ -39,7 +39,6 @@ import { NormalListUI } from './normal-list-ui';
 import { computePCANormalFromPoints, computeCentroid } from './pca-normal';
 import { depthGsplatVS, depthGsplatVS_WGSL } from './shaders/depth-shader';
 
-
 // override global pick to pack depth instead of meshInstance id
 const pickDepthGlsl = /* glsl */ `
 uniform vec4 camera_params;     // 1/far, far, near, isOrtho
@@ -151,6 +150,10 @@ class Viewer {
     normalListUI: NormalListUI;
 
     forceRenderNextFrame = false;
+
+    eraserActive = false;
+
+    private _gsplatMaterial: any = null;
 
     constructor(global: Global, gsplatLoad: Promise<Entity>, skyboxLoad: Promise<void>) {
         this.global = global;
@@ -305,8 +308,10 @@ class Viewer {
             }
 
             if (this.inputController && this.cameraManager) {
-                // update inputs
-                this.inputController.update(deltaTime, this.cameraManager.camera.distance);
+                // Skip camera input when actively erasing to prevent rotation
+                if (!this.eraserActive) {
+                    this.inputController.update(deltaTime, this.cameraManager.camera.distance);
+                }
 
                 // update cameras
                 this.cameraManager.update(deltaTime, this.inputController.frame);
@@ -489,28 +494,38 @@ class Viewer {
 
         // wait for the model to load
         Promise.all([gsplatLoad, skyboxLoad]).then((results) => {
-            const gsplat = results[0].gsplat as GSplatComponent;
+            const gsplat = results[0]?.gsplat as GSplatComponent | null;
 
-            // Attach centers overlay to gsplat entity
-            this.centersOverlay.attach(results[0]);
+            if (gsplat) {
+                // Attach centers overlay to gsplat entity
+                this.centersOverlay.attach(results[0]);
 
-            // Initialize picker eagerly for depth filtering and point selection
-            import('./picker').then(({ Picker }) => {
-                const pickerInstance = new Picker(app, camera, results[0]);
-                (this as any)._picker = pickerInstance;
-            });
+                // Initialize picker eagerly for depth filtering and point selection
+                import('./picker').then(({ Picker }) => {
+                    const pickerInstance = new Picker(app, camera, results[0]);
+                    (this as any)._picker = pickerInstance;
+                });
 
-            // Update filter statistics after gsplat loads
-            setTimeout(() => {
-                const stats = this.centersOverlay.getFilterStats();
-                events.fire('filterStats:changed', stats);
-            }, 500);
+                // Update filter statistics after gsplat loads
+                setTimeout(() => {
+                    const stats = this.centersOverlay.getFilterStats();
+                    events.fire('filterStats:changed', stats);
+                }, 500);
 
-            // Attach point marker to gsplat entity
-            this.pointMarker.attach(results[0]);
+                // Attach point marker to gsplat entity
+                this.pointMarker.attach(results[0]);
 
-            // Attach normal marker to gsplat entity
-            this.normalMarker.attach(results[0]);
+                // Attach normal marker to gsplat entity
+                this.normalMarker.attach(results[0]);
+
+                // 点云模式：自动开启 show centers
+                import('./index').then(({ isPointCloudMode }) => {
+                    if (isPointCloudMode()) {
+                        state.showCenters = true;
+                        state.centersPointSize = 3;
+                    }
+                });
+            }
 
             // Initialize point list UI after DOM is ready
             let pointListContainer: HTMLElement | null = null;
@@ -541,9 +556,11 @@ class Viewer {
             }
 
             // get scene bounding box
-            const gsplatBbox = gsplat.customAabb;
-            if (gsplatBbox) {
-                sceneBound.setFromTransformedAabb(gsplatBbox, results[0].getWorldTransform());
+            if (gsplat) {
+                const gsplatBbox = gsplat.customAabb;
+                if (gsplatBbox) {
+                    sceneBound.setFromTransformedAabb(gsplatBbox, results[0].getWorldTransform());
+                }
             }
 
             if (!config.noui) {
@@ -570,8 +587,6 @@ class Viewer {
 
                 isUpdating = true;
                 try {
-                    // Use picker to get precise world position under cursor (actual point position, not fixed distance)
-                    // Similar to annotation.html: ray-based point selection without depth buffer
                     if (!picker) {
                         picker = (this as any)._picker;
                     }
@@ -581,27 +596,20 @@ class Viewer {
                         (this as any)._picker = picker;
                     }
 
-                    const worldPos = await picker.pick(x, y);
-                    if (worldPos) {
-                        // Set precise cursor position for highlighting (actual point position from picker)
-                        // Use a larger radius to highlight approximately 10 nearest points
-                        // The radius will be dynamically adjusted based on point density
-                        this.centersOverlay.setCursorHighlightRadius(0.01); // Larger radius for ~10 points
-                        this.centersOverlay.setCursorPosition(worldPos, true);
+                    // Find the 5 nearest points to the cursor ray
+                    const nearest = await picker.pickNearest(x, y, 5);
+                    if (nearest.length > 0) {
+                        this.centersOverlay.setCursorHighlightIds(nearest.map((n: { index: number }) => n.index));
                     } else {
-                        // No point found under cursor
-                        this.centersOverlay.setCursorPosition(null, false);
+                        this.centersOverlay.setCursorHighlightIds([]);
                     }
-                    
-                    // Request immediate render
+
                     app.renderNextFrame = true;
                 } catch (error) {
-                    // Silently handle errors
                     console.debug('Highlight error:', error);
-                    this.centersOverlay.setCursorPosition(null, false);
+                    this.centersOverlay.setCursorHighlightIds([]);
                 } finally {
                     isUpdating = false;
-                    // Process any pending update
                     if (pendingUpdate) {
                         const nextUpdate = pendingUpdate;
                         pendingUpdate = null;
@@ -620,7 +628,7 @@ class Viewer {
                         rafId = null;
                     }
                     pendingUpdate = null;
-                    this.centersOverlay.setCursorPosition(null, false);
+                    this.centersOverlay.setCursorHighlightIds([]);
                     return;
                 }
 
@@ -650,7 +658,7 @@ class Viewer {
                     rafId = null;
                 }
                 pendingUpdate = null;
-                this.centersOverlay.setCursorPosition(null, false);
+                this.centersOverlay.setCursorHighlightIds([]);
                 app.renderNextFrame = true;
             });
 
@@ -804,6 +812,352 @@ class Viewer {
                         app.renderNextFrame = true;
                     });
                     buttonsContainer.appendChild(normalBtn);
+
+                    // Eraser tool button
+                    const eraserBtn = document.createElement('button');
+                    eraserBtn.id = 'toggleEraserBtn';
+                    eraserBtn.className = 'controlButton';
+                    eraserBtn.title = 'Toggle Eraser Mode (brush-erase splats)';
+                    eraserBtn.innerHTML = '&#x1F9F9;'; // 🧹 broom
+                    eraserBtn.style.cssText = 'font-size: 20px; padding: 8px; cursor: pointer;';
+                    // Box select state (declared early for mutual exclusion with eraser)
+                    const boxSelectState = { enabled: false, isDrawing: false, startX: 0, startY: 0, prevRenderMode: 'high' as 'high' | 'low' | 'off' | 'depth', rectDiv: null as HTMLDivElement | null };
+                    let boxSelectBtn: HTMLButtonElement | null = null;
+
+                    // brushScale: multiplied by cameraDistance to get world-space brush radius
+                    const eraserModeState = { enabled: false, isErasing: false, brushScale: 0.0002, prevRenderMode: 'high' as 'high' | 'low' | 'off' | 'depth' };
+                    const updateEraserCursor = () => {
+                        canvas.style.cursor = 'crosshair';
+                    };
+                    eraserBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        eraserModeState.enabled = !eraserModeState.enabled;
+                        this.eraserActive = eraserModeState.enabled;
+                        if (eraserModeState.enabled) {
+                            // Deactivate box select if active
+                            if (boxSelectState.enabled) {
+                                boxSelectState.enabled = false;
+                                if (boxSelectBtn) {
+                                    boxSelectBtn.classList.remove('active');
+                                    boxSelectBtn.style.background = '';
+                                    boxSelectBtn.style.color = '';
+                                }
+                                canvas.style.cursor = '';
+                            }
+                            // Enter eraser mode: hide Gaussians, show centers only
+                            eraserModeState.prevRenderMode = state.renderMode;
+                            state.renderMode = 'off';
+                            events.fire('renderMode:changed', 'off');
+                            state.showCenters = true;
+                            this.centersOverlay.setEnabled(true);
+                            events.fire('showCenters:changed', true);
+
+                            eraserBtn.classList.add('active');
+                            eraserBtn.style.background = '#cc3300';
+                            eraserBtn.style.color = '#fff';
+                            eraserSliderContainer.style.display = 'flex';
+                            updateEraserCursor();
+                        } else {
+                            // Exit eraser mode: restore Gaussian rendering
+                            const prev = eraserModeState.prevRenderMode;
+                            state.renderMode = prev;
+                            events.fire('renderMode:changed', prev);
+
+                            eraserBtn.classList.remove('active');
+                            eraserBtn.style.background = '';
+                            eraserBtn.style.color = '';
+                            eraserSliderContainer.style.display = 'none';
+                            canvas.style.cursor = '';
+                        }
+                        app.renderNextFrame = true;
+                    });
+                    // Scroll wheel to adjust brush scale in eraser mode
+                    canvas.addEventListener('wheel', (e: WheelEvent) => {
+                        if (!eraserModeState.enabled) return;
+                        e.preventDefault();
+                        const factor = e.deltaY > 0 ? 0.8 : 1.25;
+                        eraserModeState.brushScale = Math.max(0.0001, Math.min(0.0005, eraserModeState.brushScale * factor));
+                        eraserSlider.value = String(eraserModeState.brushScale);
+                        eraserSliderValue.textContent = eraserModeState.brushScale.toFixed(4);
+                    }, { passive: false });
+                    buttonsContainer.appendChild(eraserBtn);
+
+                    // Eraser brush size slider (hidden until eraser mode)
+                    const eraserSliderContainer = document.createElement('div');
+                    eraserSliderContainer.id = 'eraserSliderContainer';
+                    eraserSliderContainer.style.cssText = 'display:none; align-items:center; gap:6px; padding:4px 8px; background:#333; border-radius:4px;';
+                    const eraserSliderLabel = document.createElement('span');
+                    eraserSliderLabel.textContent = 'Brush';
+                    eraserSliderLabel.style.cssText = 'font-size:12px; color:#ccc; white-space:nowrap;';
+                    const eraserSlider = document.createElement('input');
+                    eraserSlider.type = 'range';
+                    eraserSlider.min = '0.0001';
+                    eraserSlider.max = '0.0005';
+                    eraserSlider.step = '0.00001';
+                    eraserSlider.value = '0.0002';
+                    eraserSlider.style.cssText = 'width:120px; cursor:pointer;';
+                    const eraserSliderValue = document.createElement('span');
+                    eraserSliderValue.textContent = '0.0002';
+                    eraserSliderValue.style.cssText = 'font-size:12px; color:#ccc; min-width:50px;';
+                    eraserSlider.addEventListener('input', () => {
+                        eraserModeState.brushScale = parseFloat(eraserSlider.value);
+                        eraserSliderValue.textContent = eraserModeState.brushScale.toFixed(4);
+                    });
+                    eraserSliderContainer.appendChild(eraserSliderLabel);
+                    eraserSliderContainer.appendChild(eraserSlider);
+                    eraserSliderContainer.appendChild(eraserSliderValue);
+                    buttonsContainer.appendChild(eraserSliderContainer);
+
+                    // Undo eraser button
+                    const undoEraserBtn = document.createElement('button');
+                    undoEraserBtn.id = 'undoEraserBtn';
+                    undoEraserBtn.className = 'controlButton';
+                    undoEraserBtn.title = 'Undo All Erased Points';
+                    undoEraserBtn.innerHTML = '&#x21A9;'; // ↩
+                    undoEraserBtn.style.cssText = 'font-size: 20px; padding: 8px; cursor: pointer;';
+                    undoEraserBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        this.centersOverlay.uneraseSplats();
+                        app.renderNextFrame = true;
+                    });
+                    buttonsContainer.appendChild(undoEraserBtn);
+
+                    // Apply erased points button — permanently removes erased splats from scene
+                    const applyEraseBtn = document.createElement('button');
+                    applyEraseBtn.id = 'applyEraseBtn';
+                    applyEraseBtn.className = 'controlButton';
+                    applyEraseBtn.title = 'Apply: permanently remove erased points from scene';
+                    applyEraseBtn.innerHTML = '&#x2714;'; // ✔
+                    applyEraseBtn.style.cssText = 'font-size: 20px; padding: 8px; cursor: pointer;';
+                    applyEraseBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+
+                        const erasedCount = this.centersOverlay.getErasedCount();
+                        if (erasedCount === 0) {
+                            alert('No points have been erased.');
+                            return;
+                        }
+
+                        // Get the filterStateTexture to pass to gsplat material
+                        const eraserTexture = this.centersOverlay.getFilterStateTexture();
+                        if (!eraserTexture) {
+                            alert('Eraser state texture not available.');
+                            return;
+                        }
+
+                        // Set eraser define + texture on gsplat material
+                        const mat = this._gsplatMaterial;
+                        if (mat) {
+                            mat.setDefine('GSPLAT_ERASER', true);
+                            mat.setParameter('eraserState', eraserTexture);
+                            mat.update();
+                            console.log(`Applied GSPLAT_ERASER with ${erasedCount} erased splats`);
+                        } else {
+                            console.warn('gsplat material not available yet');
+                        }
+
+                        // Restore Gaussian rendering
+                        const prev = eraserModeState.prevRenderMode;
+                        state.renderMode = prev;
+                        events.fire('renderMode:changed', prev);
+
+                        // Exit eraser mode
+                        eraserModeState.enabled = false;
+                        eraserModeState.isErasing = false;
+                        this.eraserActive = false;
+                        eraserBtn.classList.remove('active');
+                        eraserBtn.style.background = '';
+                        eraserBtn.style.color = '';
+                        eraserSliderContainer.style.display = 'none';
+                        canvas.style.cursor = '';
+                        this.centersOverlay.clearErasePreview();
+
+                        app.renderNextFrame = true;
+                    });
+                    buttonsContainer.appendChild(applyEraseBtn);
+
+                    // Box select button
+                    boxSelectBtn = document.createElement('button');
+                    boxSelectBtn.id = 'boxSelectBtn';
+                    boxSelectBtn.className = 'controlButton';
+                    boxSelectBtn.title = 'Box Select: draw rectangle to keep only enclosed points';
+                    boxSelectBtn.innerHTML = '&#x25A1;';
+                    boxSelectBtn.style.cssText = 'font-size: 20px; padding: 8px; cursor: pointer;';
+                    boxSelectBtn.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        boxSelectState.enabled = !boxSelectState.enabled;
+                        if (boxSelectState.enabled) {
+                            // Deactivate eraser if active
+                            if (eraserModeState.enabled) {
+                                eraserModeState.enabled = false;
+                                eraserModeState.isErasing = false;
+                                this.eraserActive = false;
+                                eraserBtn.classList.remove('active');
+                                eraserBtn.style.background = '';
+                                eraserBtn.style.color = '';
+                                eraserSliderContainer.style.display = 'none';
+                            }
+                            // Enter box select mode
+                            boxSelectState.prevRenderMode = state.renderMode;
+                            state.renderMode = 'off';
+                            events.fire('renderMode:changed', 'off');
+                            state.showCenters = true;
+                            this.centersOverlay.setEnabled(true);
+                            events.fire('showCenters:changed', true);
+                            this.eraserActive = true;
+
+                            boxSelectBtn.classList.add('active');
+                            boxSelectBtn.style.background = '#0066cc';
+                            boxSelectBtn.style.color = '#fff';
+                            canvas.style.cursor = 'crosshair';
+                        } else {
+                            // Exit box select mode
+                            const prev = boxSelectState.prevRenderMode;
+                            state.renderMode = prev;
+                            events.fire('renderMode:changed', prev);
+                            this.eraserActive = false;
+
+                            boxSelectBtn.classList.remove('active');
+                            boxSelectBtn.style.background = '';
+                            boxSelectBtn.style.color = '';
+                            canvas.style.cursor = '';
+                        }
+                        app.renderNextFrame = true;
+                    });
+                    buttonsContainer.appendChild(boxSelectBtn);
+
+                    // Compute world-space brush radius
+                    const getWorldRadius = () => {
+                        const camDist = this.cameraManager ? this.cameraManager.camera.distance : 100;
+                        return eraserModeState.brushScale * camDist;
+                    };
+
+                    // Get normalized mouse coords for ray
+                    const getNormalized = (clientX: number, clientY: number) => {
+                        const rect = canvas.getBoundingClientRect();
+                        return {
+                            nx: (clientX - rect.left) / rect.width,
+                            ny: (clientY - rect.top) / rect.height
+                        };
+                    };
+
+                    // Find indices near ray
+                    const findIndices = (clientX: number, clientY: number) => {
+                        const pickerRef = (this as any)._picker;
+                        if (!pickerRef || !pickerRef.positionCacheValid) return [];
+                        const { nx, ny } = getNormalized(clientX, clientY);
+                        return pickerRef.getSplatsNearRay(nx, ny, getWorldRadius());
+                    };
+
+                    // Eraser pointer events
+                    canvas.addEventListener('pointerdown', (e: PointerEvent) => {
+                        if (!eraserModeState.enabled || e.button !== 0) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        eraserModeState.isErasing = true;
+                        // Clear preview, do actual erase
+                        this.centersOverlay.clearErasePreview();
+                        const indices = findIndices(e.clientX, e.clientY);
+                        if (indices.length > 0) {
+                            this.centersOverlay.eraseSplats(indices);
+                            app.renderNextFrame = true;
+                        }
+                    });
+
+                    canvas.addEventListener('pointermove', (e: PointerEvent) => {
+                        if (!eraserModeState.enabled) return;
+
+                        if (eraserModeState.isErasing) {
+                            e.preventDefault();
+                            // Erasing: actually erase points
+                            const indices = findIndices(e.clientX, e.clientY);
+                            if (indices.length > 0) {
+                                this.centersOverlay.eraseSplats(indices);
+                                app.renderNextFrame = true;
+                            }
+                        } else {
+                            // Hovering: preview which points would be erased (red highlight)
+                            this.centersOverlay.clearErasePreview();
+                            const indices = findIndices(e.clientX, e.clientY);
+                            this.centersOverlay.previewErase(indices);
+                            app.renderNextFrame = true;
+                        }
+                    });
+
+                    const stopErasing = () => {
+                        eraserModeState.isErasing = false;
+                    };
+                    canvas.addEventListener('pointerup', stopErasing);
+                    canvas.addEventListener('pointerleave', () => {
+                        eraserModeState.isErasing = false;
+                        this.centersOverlay.clearErasePreview();
+                        app.renderNextFrame = true;
+                    });
+
+                    // Box select pointer events
+                    canvas.addEventListener('pointerdown', (e: PointerEvent) => {
+                        if (!boxSelectState.enabled || e.button !== 0) return;
+                        e.preventDefault();
+                        boxSelectState.isDrawing = true;
+                        boxSelectState.startX = e.clientX;
+                        boxSelectState.startY = e.clientY;
+                        canvas.setPointerCapture(e.pointerId);
+
+                        const div = document.createElement('div');
+                        div.style.cssText = 'position:fixed; border:2px dashed #00aaff; background:rgba(0,170,255,0.1); pointer-events:none; z-index:10000;';
+                        div.style.left = `${e.clientX}px`;
+                        div.style.top = `${e.clientY}px`;
+                        div.style.width = '0px';
+                        div.style.height = '0px';
+                        document.body.appendChild(div);
+                        boxSelectState.rectDiv = div;
+                    });
+
+                    canvas.addEventListener('pointermove', (e: PointerEvent) => {
+                        if (!boxSelectState.isDrawing || !boxSelectState.rectDiv) return;
+                        const left = Math.min(boxSelectState.startX, e.clientX);
+                        const top = Math.min(boxSelectState.startY, e.clientY);
+                        const width = Math.abs(e.clientX - boxSelectState.startX);
+                        const height = Math.abs(e.clientY - boxSelectState.startY);
+                        boxSelectState.rectDiv.style.left = `${left}px`;
+                        boxSelectState.rectDiv.style.top = `${top}px`;
+                        boxSelectState.rectDiv.style.width = `${width}px`;
+                        boxSelectState.rectDiv.style.height = `${height}px`;
+                    });
+
+                    canvas.addEventListener('pointerup', (e: PointerEvent) => {
+                        if (!boxSelectState.isDrawing) return;
+                        boxSelectState.isDrawing = false;
+
+                        if (boxSelectState.rectDiv) {
+                            boxSelectState.rectDiv.remove();
+                            boxSelectState.rectDiv = null;
+                        }
+
+                        const rect = canvas.getBoundingClientRect();
+                        const nx1 = (Math.min(boxSelectState.startX, e.clientX) - rect.left) / rect.width;
+                        const ny1 = (Math.min(boxSelectState.startY, e.clientY) - rect.top) / rect.height;
+                        const nx2 = (Math.max(boxSelectState.startX, e.clientX) - rect.left) / rect.width;
+                        const ny2 = (Math.max(boxSelectState.startY, e.clientY) - rect.top) / rect.height;
+
+                        // Guard minimum rect size (5px)
+                        const pixelWidth = Math.abs(e.clientX - boxSelectState.startX);
+                        const pixelHeight = Math.abs(e.clientY - boxSelectState.startY);
+                        if (pixelWidth < 5 || pixelHeight < 5) return;
+
+                        const pickerRef = (this as any)._picker;
+                        if (!pickerRef || !pickerRef.positionCacheValid) return;
+
+                        const keepIndices = pickerRef.getPointsInScreenRect(nx1, ny1, nx2, ny2);
+                        if (keepIndices.length === 0) return;
+
+                        this.centersOverlay.eraseAllExcept(new Set(keepIndices));
+                        app.renderNextFrame = true;
+                    });
 
                     // Wire compute button in normalListUI
                     if (this.normalListUI) {
@@ -1000,6 +1354,7 @@ class Viewer {
 
                 // get the gsplat material for depth viz toggling
                 const gsplatMaterial = gsplat.unified ? app.scene.gsplat.material : gsplat.material;
+                this._gsplatMaterial = gsplatMaterial;
 
                 // handle render mode changes for non-LOD splats
                 const updateSplatRendering = () => {
@@ -1079,6 +1434,7 @@ class Viewer {
 
                         // get the LOD gsplat material for depth viz toggling
                         const lodMaterial = gsplat.material;
+                        this._gsplatMaterial = lodMaterial;
 
                         // handle quality mode changes
                         const updateLod = () => {

@@ -61,7 +61,7 @@ export class PointMarker {
     private nextColorId = 0;
     private pointSpheres = new Map<number, { entity: Entity; meshInstance: MeshInstance; isHovered: boolean }>();
     hoveredListItemIndex: number | null = null;
-    private currentSphereSize = 0.01; // Large size for better visibility
+    private currentSphereSize = 0.03; // Large size for better visibility (3x larger)
     
     // Callbacks
     onPointsChanged?: () => void;

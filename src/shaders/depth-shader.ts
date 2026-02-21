@@ -16,6 +16,9 @@ mediump vec4 discardVec = vec4(0.0, 0.0, 2.0, 1.0);
 	uniform sampler2D colorRamp;
 	uniform float colorRampIntensity;
 #endif
+#ifdef GSPLAT_ERASER
+	uniform sampler2D eraserState;
+#endif
 #ifdef GSPLAT_DEPTH_VIZ
 	vec3 turboColormap(float t) {
 		const vec4 kRedVec4   = vec4(0.13572138, 4.61539260, -42.66032258, 132.13108234);
@@ -40,6 +43,12 @@ void main(void) {
 		gl_Position = discardVec;
 		return;
 	}
+	#ifdef GSPLAT_ERASER
+		if (texelFetch(eraserState, source.uv, 0).g > 0.5) {
+			gl_Position = discardVec;
+			return;
+		}
+	#endif
 	vec3 modelCenter = readCenter(source);
 	SplatCenter center;
 	center.modelCenterOriginal = modelCenter;
@@ -109,6 +118,10 @@ const discardVec: vec4f = vec4f(0.0, 0.0, 2.0, 1.0);
 	var colorRamp: texture_2d<f32>;
 	var colorRampSampler: sampler;
 #endif
+#ifdef GSPLAT_ERASER
+	var eraserState: texture_2d<f32>;
+	var eraserStateSampler: sampler;
+#endif
 #ifdef GSPLAT_DEPTH_VIZ
 	fn turboColormap(t_in: f32) -> vec3f {
 		let kRedVec4   = vec4f(0.13572138, 4.61539260, -42.66032258, 132.13108234);
@@ -135,6 +148,13 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
 		output.position = discardVec;
 		return output;
 	}
+	#ifdef GSPLAT_ERASER
+		let eraserUV = vec2f(f32(source.uv.x) + 0.5, f32(source.uv.y) + 0.5) / vec2f(textureDimensions(eraserState, 0));
+		if (textureSampleLevel(eraserState, eraserStateSampler, eraserUV, 0.0).g > 0.5) {
+			output.position = discardVec;
+			return output;
+		}
+	#endif
 	var modelCenter: vec3f = readCenter(&source);
 	var center: SplatCenter;
 	center.modelCenterOriginal = modelCenter;

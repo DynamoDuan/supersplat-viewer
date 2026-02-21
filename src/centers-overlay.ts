@@ -69,14 +69,10 @@ class CentersOverlay {
     private frozenFilterMaterial: ShaderMaterial | null = null;
     private filterFrozen = false;
 
-    // Proximity highlight state
-    private cursorPosition: Vec3 = new Vec3();
+    // Cursor highlight state (show only nearest N points by ID)
     private cursorHighlightEnabled = false;
-    private cursorHighlightRadius = 0.02;  // Larger radius for highlighting ~10 nearest points
     private cursorHighlightColor = new Color(0.0, 1.0, 0.0, 1.0);  // Green for cursor proximity
-    private cursorNeighborColor = new Color(0.5, 1.0, 0.5, 1.0);  // Light green for neighbors
-    private highlightedPointIds: number[] = [];  // IDs of the nearest N points to highlight
-    private maxHighlightedPoints = 10;  // Maximum number of points to highlight
+    private cursorHighlightIds: number[] = [];  // IDs of the nearest N points to highlight (max 5)
 
     constructor(app: AppBase) {
         this.app = app;
@@ -380,24 +376,18 @@ class CentersOverlay {
         // Always use FUNC_ALWAYS — filtering is done via CPU-computed filter state texture
         this.material.depthFunc = 7; // FUNC_ALWAYS
 
-        // Proximity highlight uniforms (real-time cursor highlighting)
-        this.material.setParameter('cursorPosition', [this.cursorPosition.x, this.cursorPosition.y, this.cursorPosition.z]);
-        this.material.setParameter('cursorHighlightRadius', this.cursorHighlightRadius);
+        // Cursor highlight uniforms (nearest N points by ID)
         this.material.setParameter('cursorHighlightEnabled', this.cursorHighlightEnabled ? 1.0 : 0.0);
         this.material.setParameter('cursorHighlightColor', [
             this.cursorHighlightColor.r,
             this.cursorHighlightColor.g,
             this.cursorHighlightColor.b
         ]);
-        this.material.setParameter('cursorNeighborColor', [
-            this.cursorNeighborColor.r,
-            this.cursorNeighborColor.g,
-            this.cursorNeighborColor.b
-        ]);
-        
-        // Pass highlighted point IDs array (for highlighting nearest N points)
-        // We'll use a uniform array, but since WebGL has limitations, we'll use distance-based approach instead
-        // The shader will highlight points within radius, sorted by distance
+        const ids = this.cursorHighlightIds;
+        for (let i = 0; i < 5; i++) {
+            this.material.setParameter(`cursorId${i}`, i < ids.length ? ids[i] : -1);
+        }
+        this.material.setParameter('cursorIdCount', ids.length);
 
         // Pass camera position for SH evaluation
         // Get camera from the global viewer state
@@ -1128,16 +1118,16 @@ class CentersOverlay {
 
             const idx = i * 4;
             pixels[idx] = isFiltered ? 255 : 0;
-            pixels[idx + 1] = 0;
+            // pixels[idx + 1] preserved (G channel = eraser state)
             pixels[idx + 2] = 0;
             pixels[idx + 3] = 255;
         }
 
-        // Clear remaining pixels
+        // Clear remaining pixels (preserve G channel)
         for (let i = numSplats; i < this.splatTexWidth * this.splatTexHeight; i++) {
             const idx = i * 4;
             pixels[idx] = 0;
-            pixels[idx + 1] = 0;
+            // pixels[idx + 1] preserved (G channel = eraser state)
             pixels[idx + 2] = 0;
             pixels[idx + 3] = 255;
         }
@@ -1193,8 +1183,8 @@ class CentersOverlay {
         if (!this.filterStateTexture) return;
         const pixels = this.filterStateTexture.lock();
         for (let i = 0; i < pixels.length; i += 4) {
-            pixels[i] = 0;
-            pixels[i + 1] = 0;
+            pixels[i] = 0;      // R = depth filter
+            // pixels[i + 1] preserved (G channel = eraser state)
             pixels[i + 2] = 0;
             pixels[i + 3] = 255;
         }
@@ -1203,38 +1193,130 @@ class CentersOverlay {
     }
 
     /**
-     * Set cursor position for proximity highlighting
-     * When enabled, points near this position will automatically change color
-     * @param position - World space position of cursor
-     * @param enabled - Whether to enable cursor highlighting
+     * Preview erase: mark points in filterStateTexture B channel for red highlight.
+     * Call clearErasePreview() before setting new preview.
      */
-    setCursorPosition(position: Vec3 | null, enabled = true) {
-        if (position) {
-            this.cursorPosition.copy(position);
-            this.cursorHighlightEnabled = enabled;
-        } else {
-            this.cursorHighlightEnabled = false;
+    previewErase(indices: number[]) {
+        if (!this.filterStateTexture || indices.length === 0) return;
+        const pixels = this.filterStateTexture.lock();
+        for (const idx of indices) {
+            const pixelIdx = idx * 4;
+            if (pixelIdx + 2 < pixels.length) {
+                pixels[pixelIdx + 2] = 255; // B channel = preview
+            }
+        }
+        this.filterStateTexture.unlock();
+    }
+
+    /**
+     * Clear erase preview (B channel).
+     */
+    clearErasePreview() {
+        if (!this.filterStateTexture) return;
+        const pixels = this.filterStateTexture.lock();
+        for (let i = 0; i < pixels.length; i += 4) {
+            pixels[i + 2] = 0;
+        }
+        this.filterStateTexture.unlock();
+    }
+
+    /**
+     * Erase (hide) splats by marking them in filterStateTexture G channel.
+     * The centers overlay shader will discard these points.
+     * Also writes to engine stateTexture if available (hides from gsplat renderer).
+     */
+    eraseSplats(indices: number[]) {
+        if (!this.gsplatEntity || indices.length === 0) return;
+
+        // 1. Write to our own filterStateTexture G channel (always exists)
+        if (this.filterStateTexture) {
+            const pixels = this.filterStateTexture.lock();
+            for (const idx of indices) {
+                const pixelIdx = idx * 4;
+                if (pixelIdx + 1 < pixels.length) {
+                    pixels[pixelIdx + 1] = 255; // G channel = erased
+                }
+            }
+            this.filterStateTexture.unlock();
         }
     }
 
     /**
-     * Set the radius for cursor proximity highlighting
-     * @param radius - Radius in world units
+     * Get the set of splat indices that are currently erased.
      */
-    setCursorHighlightRadius(radius: number) {
-        this.cursorHighlightRadius = radius;
+    getErasedIndices(): Set<number> {
+        const result = new Set<number>();
+        if (!this.filterStateTexture) return result;
+
+        const pixels = this.filterStateTexture.lock();
+        const totalPixels = this.splatTexWidth * this.splatTexHeight;
+        for (let i = 0; i < totalPixels; i++) {
+            if (pixels[i * 4 + 1] > 0) { // G channel
+                result.add(i);
+            }
+        }
+        this.filterStateTexture.unlock();
+        return result;
     }
 
     /**
-     * Set the highlight color for cursor proximity
-     * @param color - Main highlight color (for points very close to cursor)
-     * @param neighborColor - Neighbor highlight color (for points in outer radius)
+     * Get the filterStateTexture so it can be passed to the gsplat material for eraser rendering.
+     * The G channel marks erased splats.
      */
-    setCursorHighlightColor(color: Color, neighborColor?: Color) {
-        this.cursorHighlightColor.copy(color);
-        if (neighborColor) {
-            this.cursorNeighborColor.copy(neighborColor);
+    getFilterStateTexture() {
+        return this.filterStateTexture;
+    }
+
+    /**
+     * Get the count of erased splats.
+     */
+    getErasedCount(): number {
+        if (!this.filterStateTexture) return 0;
+        const pixels = this.filterStateTexture.lock();
+        let count = 0;
+        const totalPixels = this.splatTexWidth * this.splatTexHeight;
+        for (let i = 0; i < totalPixels; i++) {
+            if (pixels[i * 4 + 1] > 0) count++;
         }
+        this.filterStateTexture.unlock();
+        return count;
+    }
+
+    /**
+     * Un-erase all splats.
+     */
+    uneraseSplats() {
+        // Clear filterStateTexture G channel
+        if (this.filterStateTexture) {
+            const pixels = this.filterStateTexture.lock();
+            for (let i = 0; i < pixels.length; i += 4) {
+                pixels[i + 1] = 0; // clear G channel
+            }
+            this.filterStateTexture.unlock();
+        }
+    }
+
+    /**
+     * Erase all splats except those in the keep set.
+     * Points inside keepIndices are un-erased (G=0), all others are erased (G=255).
+     */
+    eraseAllExcept(keepIndices: Set<number>): void {
+        if (!this.filterStateTexture) return;
+        const pixels = this.filterStateTexture.lock();
+        const totalPixels = this.splatTexWidth * this.splatTexHeight;
+        for (let i = 0; i < totalPixels; i++) {
+            const idx = i * 4;
+            pixels[idx + 1] = keepIndices.has(i) ? 0 : 255;
+        }
+        this.filterStateTexture.unlock();
+    }
+
+    /**
+     * Set the IDs of points to highlight near the cursor (max 5)
+     */
+    setCursorHighlightIds(ids: number[]) {
+        this.cursorHighlightIds = ids.slice(0, 5);
+        this.cursorHighlightEnabled = ids.length > 0;
     }
 
     /**

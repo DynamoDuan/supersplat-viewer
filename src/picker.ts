@@ -2,6 +2,7 @@ import {
     type AppBase,
     type Entity,
     GSplatComponent,
+    Mat4,
     Ray,
     RenderTarget,
     Vec3,
@@ -86,16 +87,23 @@ const findClosestPointOnRay = (rayOrigin: Vec3, rayDirection: Vec3, pointPositio
 
 class Picker {
     pick: (x: number, y: number) => Promise<Vec3 | null>;
+    pickNearest: (x: number, y: number, count?: number) => Promise<{ index: number; position: Vec3 }[]>;
     getClosestPointIndex: (x: number, y: number) => Promise<{ index: number; position: Vec3 } | null>;
+    getSplatsNearRay: (normalizedX: number, normalizedY: number, worldRadius: number) => number[];
+    getPointsInScreenRect: (x1: number, y1: number, x2: number, y2: number) => number[];
     release: () => void;
 
     private gsplatEntity: Entity | null = null;
+    private camera: Entity;
+    private app: AppBase;
     cachedPositions: Vec3[] | null = null;
     cachedOpacities: Float32Array | null = null;
     positionCacheValid = false;
 
     constructor(app: AppBase, camera: Entity, gsplatEntity?: Entity) {
         this.gsplatEntity = gsplatEntity || null;
+        this.camera = camera;
+        this.app = app;
 
         // Load point positions from texture (cache for performance)
         const loadPositions = async () => {
@@ -261,6 +269,81 @@ class Picker {
             return closestPoint;
         };
 
+        // Get the N nearest points to the ray through screen coords
+        this.pickNearest = async (x: number, y: number, count: number = 5): Promise<{ index: number; position: Vec3 }[]> => {
+            if (!this.gsplatEntity) {
+                return [];
+            }
+
+            if (!this.positionCacheValid) {
+                await loadPositions();
+            }
+
+            if (!this.cachedPositions || this.cachedPositions.length === 0) {
+                return [];
+            }
+
+            const gsplat = this.gsplatEntity.gsplat as GSplatComponent;
+            if (!gsplat) {
+                return [];
+            }
+
+            const { graphicsDevice } = app;
+
+            getRay(camera,
+                Math.floor(x * graphicsDevice.canvas.offsetWidth),
+                Math.floor(y * graphicsDevice.canvas.offsetHeight),
+                ray
+            );
+
+            const worldMatrix = this.gsplatEntity.getWorldTransform();
+            const rayOrigin = ray.origin;
+            const rayDirection = ray.direction;
+
+            const maxPointsToCheck = 100000;
+            const step = this.cachedPositions.length > maxPointsToCheck
+                ? Math.ceil(this.cachedPositions.length / maxPointsToCheck)
+                : 1;
+
+            // Track N nearest by perpendicular distance to ray
+            const nearest: { index: number; px: number; py: number; pz: number; dist: number }[] = [];
+            const wp = new Vec3();
+            const toP = new Vec3();
+            const cp = new Vec3();
+
+            for (let i = 0; i < this.cachedPositions.length; i += step) {
+                worldMatrix.transformPoint(this.cachedPositions[i], wp);
+
+                toP.sub2(wp, rayOrigin);
+                const proj = toP.dot(rayDirection);
+                if (proj < 0) continue;
+
+                cp.copy(rayOrigin).addScaled(rayDirection, proj);
+                const dist = cp.distance(wp);
+
+                if (nearest.length < count) {
+                    nearest.push({ index: i, px: wp.x, py: wp.y, pz: wp.z, dist });
+                    if (nearest.length === count) {
+                        nearest.sort((a, b) => a.dist - b.dist);
+                    }
+                } else if (dist < nearest[nearest.length - 1].dist) {
+                    const last = nearest[nearest.length - 1];
+                    last.index = i;
+                    last.px = wp.x;
+                    last.py = wp.y;
+                    last.pz = wp.z;
+                    last.dist = dist;
+                    nearest.sort((a, b) => a.dist - b.dist);
+                }
+            }
+
+            if (nearest.length < count) {
+                nearest.sort((a, b) => a.dist - b.dist);
+            }
+
+            return nearest.map(n => ({ index: n.index, position: new Vec3(n.px, n.py, n.pz) }));
+        };
+
         // Get the index of the closest point (for point selection)
         // This returns both the world position and the point index
         this.getClosestPointIndex = async (x: number, y: number): Promise<{ index: number; position: Vec3 } | null> => {
@@ -333,6 +416,86 @@ class Picker {
             }
 
             return null;
+        };
+
+        // Get all splat indices near the ray through normalized screen coords within worldRadius.
+        this.getSplatsNearRay = (normalizedX: number, normalizedY: number, worldRadius: number): number[] => {
+            if (!this.cachedPositions || this.cachedPositions.length === 0 || !this.gsplatEntity) {
+                return [];
+            }
+
+            const { graphicsDevice } = this.app;
+            getRay(
+                this.camera,
+                Math.floor(normalizedX * graphicsDevice.canvas.offsetWidth),
+                Math.floor(normalizedY * graphicsDevice.canvas.offsetHeight),
+                ray
+            );
+
+            const worldMatrix = this.gsplatEntity.getWorldTransform();
+            const rayOrigin = new Vec3().copy(ray.origin);
+            const rayDir = new Vec3().copy(ray.direction);
+            const result: number[] = [];
+            const worldPos = new Vec3();
+            const toPoint = new Vec3();
+            const closestPt = new Vec3();
+
+            for (let i = 0; i < this.cachedPositions.length; i++) {
+                worldMatrix.transformPoint(this.cachedPositions[i], worldPos);
+
+                toPoint.sub2(worldPos, rayOrigin);
+                const proj = toPoint.dot(rayDir);
+                if (proj < 0) continue;
+
+                closestPt.copy(rayOrigin).addScaled(rayDir, proj);
+                const dist = closestPt.distance(worldPos);
+
+                if (dist <= worldRadius) {
+                    result.push(i);
+                }
+            }
+
+            return result;
+        };
+
+        this.getPointsInScreenRect = (x1: number, y1: number, x2: number, y2: number): number[] => {
+            if (!this.cachedPositions || this.cachedPositions.length === 0 || !this.gsplatEntity) {
+                return [];
+            }
+
+            const viewMatrix = new Mat4().copy(this.camera.getWorldTransform()).invert();
+            const projMatrix = this.camera.camera.projectionMatrix;
+            const worldMatrix = this.gsplatEntity.getWorldTransform();
+            const mvpMatrix = new Mat4().mul2(projMatrix, new Mat4().mul2(viewMatrix, worldMatrix));
+            const mvpd = mvpMatrix.data;
+
+            const minX = Math.min(x1, x2);
+            const maxX = Math.max(x1, x2);
+            const minY = Math.min(y1, y2);
+            const maxY = Math.max(y1, y2);
+
+            const result: number[] = [];
+
+            for (let i = 0; i < this.cachedPositions.length; i++) {
+                const px = this.cachedPositions[i].x;
+                const py = this.cachedPositions[i].y;
+                const pz = this.cachedPositions[i].z;
+
+                const clipW = mvpd[3] * px + mvpd[7] * py + mvpd[11] * pz + mvpd[15];
+                if (clipW <= 0) continue;
+
+                const clipX = mvpd[0] * px + mvpd[4] * py + mvpd[8] * pz + mvpd[12];
+                const clipY = mvpd[1] * px + mvpd[5] * py + mvpd[9] * pz + mvpd[13];
+
+                const screenX = (clipX / clipW + 1) * 0.5;
+                const screenY = (1 - clipY / clipW) * 0.5;
+
+                if (screenX >= minX && screenX <= maxX && screenY >= minY && screenY <= maxY) {
+                    result.push(i);
+                }
+            }
+
+            return result;
         };
 
         this.release = () => {

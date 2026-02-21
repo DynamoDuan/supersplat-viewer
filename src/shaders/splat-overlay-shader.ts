@@ -37,12 +37,15 @@ const vertexShader = /* glsl */ `
     uniform vec4 unselectedClr;
     uniform int highlightedId;                      // ID of highlighted point (-1 = none)
 
-    // Proximity highlight uniforms (real-time cursor highlighting)
-    uniform vec3 cursorPosition;                    // World position of mouse cursor (from picker)
-    uniform float cursorHighlightRadius;            // Radius for cursor proximity highlight
+    // Cursor highlight uniforms (show only nearest N points)
     uniform float cursorHighlightEnabled;           // Enable/disable cursor highlighting (0.0 = off, 1.0 = on)
-    uniform vec3 cursorHighlightColor;              // Color for points near cursor
-    uniform vec3 cursorNeighborColor;               // Color for neighbor points (further away)
+    uniform vec3 cursorHighlightColor;              // Color for highlighted points
+    uniform int cursorId0;
+    uniform int cursorId1;
+    uniform int cursorId2;
+    uniform int cursorId3;
+    uniform int cursorId4;
+    uniform int cursorIdCount;                      // Number of valid IDs (0-5)
     uniform sampler2D depthFilterState;              // CPU-computed filter state per splat
     uniform sampler2D depthVisualization;             // Depth values for visualization
     uniform float showDepthVisualization;             // Enable depth color-coding
@@ -51,6 +54,8 @@ const vertexShader = /* glsl */ `
 
     varying vec4 varying_color;
     varying float varying_wouldBeFiltered;
+    varying float varying_erased;                     // 1.0 = erased by eraser tool
+    varying float varying_erasePreview;               // 1.0 = would be erased (hover preview)
     varying float varying_depth;                      // Depth value for visualization
 
     // calculate the current splat index and uv
@@ -158,27 +163,17 @@ const vertexShader = /* glsl */ `
                 finalColor = mix(gaussianClr, selectedClr.xyz, 0.3);
             }
 
-            // Cursor highlighting (real-time) - highlight nearest ~10 points
-            // Calculate distance from this point to cursor position
-            float distToCursor = 0.0;
-            if (cursorHighlightEnabled > 0.5) {
-                vec3 worldPos = (model * vec4(center, 1.0)).xyz;
-                distToCursor = distance(worldPos, cursorPosition);
-
-                // Use two radii: inner for main highlight, outer for neighbor highlight
-                // This creates a gradient effect highlighting approximately 10 nearest points
-                float innerRadius = cursorHighlightRadius * 0.3;  // Main highlight (closest ~3 points)
-                float outerRadius = cursorHighlightRadius;         // Neighbor highlight (up to ~10 points total)
-
-                if (distToCursor < innerRadius) {
-                    // Point is very close to cursor - use main highlight color (bright green)
+            // Cursor highlighting - highlight only the nearest N points by ID
+            bool isCursorHighlighted = false;
+            if (cursorHighlightEnabled > 0.5 && cursorIdCount > 0) {
+                int sid = int(splatId);
+                if (cursorIdCount > 0 && sid == cursorId0) isCursorHighlighted = true;
+                if (cursorIdCount > 1 && sid == cursorId1) isCursorHighlighted = true;
+                if (cursorIdCount > 2 && sid == cursorId2) isCursorHighlighted = true;
+                if (cursorIdCount > 3 && sid == cursorId3) isCursorHighlighted = true;
+                if (cursorIdCount > 4 && sid == cursorId4) isCursorHighlighted = true;
+                if (isCursorHighlighted) {
                     finalColor = cursorHighlightColor;
-                } else if (distToCursor < outerRadius) {
-                    // Point is in neighbor zone - blend based on distance (light green gradient)
-                    float t = (distToCursor - innerRadius) / (outerRadius - innerRadius);
-                    // Blend from highlight color to neighbor color, then fade to original
-                    vec3 neighborBlend = mix(cursorHighlightColor, cursorNeighborColor, 0.5);
-                    finalColor = mix(neighborBlend, finalColor, t);
                 }
             }
 
@@ -191,13 +186,31 @@ const vertexShader = /* glsl */ `
                 finalColor = mix(finalColor, vec3(1.0, 0.9, 0.0), 0.7);
             }
 
-            varying_color = vec4(finalColor, unselectedClr.w);
-
             // Read CPU-computed filter state
             varying_wouldBeFiltered = 0.0;
             if (depthFilterEnabled > 0.5) {
                 varying_wouldBeFiltered = texelFetch(depthFilterState, splatUV, 0).r;
             }
+
+            // Read eraser state from G/B channels (always active)
+            vec4 filterState = texelFetch(depthFilterState, splatUV, 0);
+            varying_erased = filterState.g;
+            varying_erasePreview = filterState.b;
+
+            // If erased, move offscreen immediately
+            if (varying_erased > 0.5) {
+                gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+                gl_PointSize = 0.0;
+                return;
+            }
+
+            // If in erase preview, override color to red
+            if (varying_erasePreview > 0.5) {
+                finalColor = vec3(1.0, 0.2, 0.2);
+            }
+
+            // Set varying_color AFTER erase preview check so red override is picked up
+            varying_color = vec4(finalColor, unselectedClr.w);
 
             // Read depth value for visualization (always initialize to 0)
             varying_depth = 0.0;
@@ -212,10 +225,16 @@ const vertexShader = /* glsl */ `
 
             gl_Position = matrix_viewProjection * model * vec4(center, 1.0);
 
-            // Make highlighted point larger
+            // Make highlighted/preview/cursor points larger
             float pointSize = splatSize;
             if (isHighlighted) {
                 pointSize = splatSize * 2.0;
+            }
+            if (isCursorHighlighted) {
+                pointSize = splatSize * 2.0;
+            }
+            if (varying_erasePreview > 0.5) {
+                pointSize = splatSize * 1.5;
             }
             gl_PointSize = pointSize;
         }
@@ -232,6 +251,8 @@ const fragmentShader = /* glsl */ `
 
     varying vec4 varying_color;
     varying float varying_wouldBeFiltered;
+    varying float varying_erased;
+    varying float varying_erasePreview;
     varying float varying_depth;
 
     // Depth colormap: blue (near) -> cyan -> green -> yellow -> red (far)
@@ -253,6 +274,9 @@ const fragmentShader = /* glsl */ `
     }
 
     void main(void) {
+        // Discard erased points
+        if (varying_erased > 0.5) discard;
+
         vec4 color = varying_color;
 
         // Apply depth visualization if enabled and depth is valid

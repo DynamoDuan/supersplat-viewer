@@ -17,12 +17,46 @@ import { initPoster, initUI } from './ui';
 import { Viewer } from './viewer';
 import { initXr } from './xr';
 import { version as appVersion } from '../package.json';
+import { preprocessPLY, type PreprocessResult } from './ply-preprocessor';
+
+// 标记是否为点云模式（非高斯PLY），供viewer使用
+let _isPointCloudMode = false;
+export const isPointCloudMode = () => _isPointCloudMode;
 
 const loadGsplat = async (app: AppBase, config: Config, progressCallback: (progress: number) => void) => {
     const { contents, contentUrl, unified, aa } = config;
-    const c = contents as unknown as ArrayBuffer;
     const filename = new URL(contentUrl, location.href).pathname.split('/').pop();
+
     const data = filename.toLowerCase() === 'meta.json' ? await (await contents).json() : undefined;
+
+    // 对于 PLY 文件，检测并预处理
+    if (filename && filename.toLowerCase().endsWith('.ply')) {
+        try {
+            const response = await contents;
+            const arrayBuffer = await response.arrayBuffer();
+            const result = await preprocessPLY(arrayBuffer);
+
+            if (result === null) {
+                throw new Error('PLY文件无法处理');
+            }
+
+            _isPointCloudMode = result.isPointCloud;
+
+            // 包装成Response给PlyParser流式读取
+            const c = new Response(result.buffer);
+            return loadGsplatAsset(app, filename, contentUrl, c, data, unified, aa, progressCallback);
+        } catch (error) {
+            console.warn('PLY处理失败，尝试原始加载:', error);
+            const c = fetch(contentUrl);
+            return loadGsplatAsset(app, filename, contentUrl, c, data, unified, aa, progressCallback);
+        }
+    }
+
+    // 非PLY文件，直接传原始fetch promise
+    return loadGsplatAsset(app, filename, contentUrl, contents, data, unified, aa, progressCallback);
+};
+
+const loadGsplatAsset = (app: AppBase, filename: string, contentUrl: string, c: any, data: any, unified: boolean, aa: boolean, progressCallback: (progress: number) => void) => {
     const asset = new Asset(filename, 'gsplat', { url: contentUrl, filename, contents: c }, data);
 
     return new Promise<Entity>((resolve, reject) => {
