@@ -755,6 +755,121 @@ class Viewer {
                     });
                     buttonsContainer.appendChild(saveBtn);
 
+                    // Download Point Cloud button (download remaining points after box select and eraser)
+                    const downloadPlyBtn = document.createElement('button');
+                    downloadPlyBtn.id = 'downloadPlyBtn';
+                    downloadPlyBtn.className = 'controlButton';
+                    downloadPlyBtn.title = '下载点云 (下载框选和擦除后剩余的点)';
+                    downloadPlyBtn.innerHTML = '⬇️';
+                    downloadPlyBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    downloadPlyBtn.addEventListener('click', async () => {
+                        try {
+                            // Get gsplat entity from the loaded entity
+                            const gsplatEntity = await gsplatLoad;
+                            if (!gsplatEntity) {
+                                alert('点云未加载');
+                                return;
+                            }
+
+                            const gsplat = gsplatEntity.gsplat as GSplatComponent;
+                            if (!gsplat || !gsplat.instance) {
+                                alert('点云实例不可用');
+                                return;
+                            }
+
+                            // Get filter state texture to know which points are kept (G channel: 0 = kept, 255 = erased)
+                            const filterTexture = this.centersOverlay.getFilterStateTexture();
+                            if (!filterTexture) {
+                                alert('过滤状态纹理不可用');
+                                return;
+                            }
+
+                            // Get point positions from picker cache or gsplat resource
+                            const pickerRef = (this as any)._picker;
+                            let positions: Vec3[] | null = null;
+                            
+                            if (pickerRef && pickerRef.cachedPositions && pickerRef.positionCacheValid) {
+                                positions = pickerRef.cachedPositions;
+                            } else {
+                                // Fallback: try to get from gsplat resource
+                                const resource = (gsplat.instance.resource as any);
+                                if (resource && resource.positions) {
+                                    const posArray = new Float32Array(resource.positions);
+                                    positions = [];
+                                    for (let i = 0; i < posArray.length; i += 3) {
+                                        positions.push(new Vec3(posArray[i], posArray[i + 1], posArray[i + 2]));
+                                    }
+                                }
+                            }
+
+                            if (!positions || positions.length === 0) {
+                                alert('无法获取点云位置数据，请等待点云加载完成');
+                                return;
+                            }
+
+                            // Read filter state
+                            const filterPixels = filterTexture.lock();
+                            const numSplats = Math.min(positions.length, filterTexture.width * filterTexture.height);
+
+                            // Collect valid points (G channel = 0 means kept)
+                            // 直接输出模型空间坐标（与原始 PLY 一致）
+                            const validPoints: number[] = [];
+                            let validCount = 0;
+
+                            for (let i = 0; i < numSplats; i++) {
+                                const pixelIdx = i * 4;
+                                const gChannel = filterPixels[pixelIdx + 1]; // G channel: 0 = kept, 255 = erased
+
+                                if (gChannel === 0) { // Point is kept
+                                    const localPos = positions[i];
+                                    validPoints.push(-localPos.x, -localPos.y, localPos.z);
+                                    validCount++;
+                                }
+                            }
+
+                            filterTexture.unlock();
+
+                            if (validCount === 0) {
+                                alert('没有剩余的点可以下载');
+                                return;
+                            }
+
+                            // Build PLY content
+                            let plyContent = 'ply\n';
+                            plyContent += 'format ascii 1.0\n';
+                            plyContent += `element vertex ${validCount}\n`;
+                            plyContent += 'property float x\n';
+                            plyContent += 'property float y\n';
+                            plyContent += 'property float z\n';
+                            plyContent += 'end_header\n';
+
+                            // Write points
+                            for (let i = 0; i < validPoints.length; i += 3) {
+                                const x = validPoints[i];
+                                const y = validPoints[i + 1];
+                                const z = validPoints[i + 2];
+                                plyContent += `${x.toFixed(6)} ${y.toFixed(6)} ${z.toFixed(6)}\n`;
+                            }
+
+                            // Download
+                            const blob = new Blob([plyContent], { type: 'text/plain' });
+                            const url = URL.createObjectURL(blob);
+                            const link = document.createElement('a');
+                            link.href = url;
+                            link.download = `point_cloud_${validCount}_points_${new Date().toISOString().replace(/[:.]/g, '-')}.ply`;
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                            URL.revokeObjectURL(url);
+
+                            console.log(`已导出 ${validCount} 个点到 PLY 文件`);
+                        } catch (error) {
+                            console.error('导出 PLY 时出错:', error);
+                            alert(`导出 PLY 时出错: ${error}`);
+                        }
+                    });
+                    buttonsContainer.appendChild(downloadPlyBtn);
+
                     // Toggle select mode button
                     const selectBtn = document.createElement('button');
                     selectBtn.id = 'toggleSelectBtn';

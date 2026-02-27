@@ -352,10 +352,11 @@ export class PointMarker {
     }
 
     // JSON export/import
+    // 导出模型空间坐标：对 viewer 世界坐标做 -x, -y（撤销 entity 的 180° Z 旋转）
     exportToJSON(): number[][] {
         return this.selectedPoints.map(point => [
-            point.position.x,
-            point.position.y,
+            -point.position.x,
+            -point.position.y,
             point.position.z
         ]);
     }
