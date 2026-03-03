@@ -14,27 +14,12 @@ export class NormalListUI {
         this.normalMarker = normalMarker;
 
         this.container.innerHTML = `
-            <div style="padding: 1rem; background: #252525; border-left: 1px solid #404040; height: 100%; overflow-y: auto;">
-                <h2 style="font-size: 1.1rem; margin-bottom: 0.5rem; color: #fff;">
-                    Normal Direction Points (<span id="normalPointCount">0</span>)
-                </h2>
-                <div style="font-size: 0.8rem; color: #888; margin-bottom: 0.75rem;">
-                    Select at least 3 points, then click Compute
-                </div>
-                <div id="normalPointsList" style="max-height: calc(100vh - 350px); overflow-y: auto; margin-bottom: 0.75rem;"></div>
-                <button id="computePCABtn" style="
-                    width: 100%;
-                    padding: 8px 12px;
-                    background: #007acc;
-                    color: #fff;
-                    border: none;
-                    border-radius: 4px;
-                    cursor: pointer;
-                    font-size: 0.9rem;
-                    margin-bottom: 0.75rem;
-                    transition: background 0.2s;
-                ">Compute PCA Normal</button>
-                <div id="normalResult" style="font-size: 0.85rem; color: #ccc; padding: 0.5rem; background: #1a1a1a; border-radius: 4px; display: none;"></div>
+            <div class="normal-list-panel">
+                <h2 class="normal-list-title">Normal Points (<span id="normalPointCount">0</span>)</h2>
+                <p class="normal-list-hint">Select ≥3 points, then Compute</p>
+                <div id="normalPointsList" class="normal-list-items"></div>
+                <button id="computePCABtn" class="normal-compute-btn">Compute PCA Normal</button>
+                <div id="normalResult" class="normal-result"></div>
             </div>
         `;
 
@@ -43,12 +28,6 @@ export class NormalListUI {
         this.resultElement = this.container.querySelector('#normalResult')!;
 
         const computeBtn = this.container.querySelector('#computePCABtn') as HTMLButtonElement;
-        computeBtn.addEventListener('mouseenter', () => {
-            computeBtn.style.background = '#005f99';
-        });
-        computeBtn.addEventListener('mouseleave', () => {
-            computeBtn.style.background = '#007acc';
-        });
         computeBtn.addEventListener('click', () => {
             this.onComputeClick?.();
         });
@@ -65,59 +44,98 @@ export class NormalListUI {
         const style = document.createElement('style');
         style.id = styleId;
         style.textContent = `
+            .normal-list-panel {
+                padding: 12px 16px;
+                background: rgba(15, 23, 42, 0.95);
+                border-left: 1px solid rgba(255,255,255,0.08);
+                height: 100%;
+                overflow-y: auto;
+            }
+            .normal-list-title {
+                font-size: 13px;
+                font-weight: 600;
+                color: #e8e6e3;
+                margin-bottom: 6px;
+            }
+            .normal-list-hint {
+                font-size: 11px;
+                color: #64748b;
+                margin-bottom: 10px;
+            }
+            .normal-list-items {
+                max-height: calc(100vh - 320px);
+                overflow-y: auto;
+                margin-bottom: 10px;
+            }
             .normal-point-item {
-                padding: 0.5rem;
-                background: #1a1a1a;
-                border-radius: 4px;
-                margin-bottom: 0.5rem;
-                font-size: 0.85rem;
+                padding: 8px 10px;
+                background: rgba(51, 65, 85, 0.5);
+                border-radius: 8px;
+                margin-bottom: 6px;
+                font-size: 12px;
                 display: flex;
                 align-items: center;
-                gap: 0.5rem;
-                transition: background 0.2s;
+                gap: 8px;
+                transition: background 0.15s;
             }
             .normal-point-item:hover {
-                background: #2a2a2a;
+                background: rgba(51, 65, 85, 0.8);
             }
             .normal-color-dot {
-                width: 12px;
-                height: 12px;
+                width: 10px;
+                height: 10px;
                 border-radius: 50%;
-                background: #00ff00;
+                background: #22c55e;
                 flex-shrink: 0;
             }
             .normal-point-info {
                 flex: 1;
-                color: #999;
+                color: #94a3b8;
+                font-family: ui-monospace, monospace;
+                font-size: 11px;
             }
             .normal-delete-btn {
                 background: transparent;
                 border: none;
-                color: #999;
+                color: #64748b;
                 cursor: pointer;
-                font-size: 1.2rem;
-                padding: 0.25rem 0.5rem;
-                border-radius: 4px;
-                transition: all 0.2s;
-                opacity: 1;
-                min-width: 28px;
-                min-height: 28px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
+                font-size: 18px;
+                padding: 4px 8px;
+                border-radius: 6px;
+                transition: all 0.15s;
             }
             .normal-delete-btn:hover {
-                color: #f44336;
-                background: rgba(244, 67, 54, 0.1);
+                color: #ef4444;
+                background: rgba(239, 68, 68, 0.15);
             }
-            #normalPointsList::-webkit-scrollbar {
-                width: 6px;
+            .normal-compute-btn {
+                width: 100%;
+                padding: 10px 14px;
+                background: #3b82f6;
+                color: #fff;
+                border: none;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: background 0.15s;
             }
-            #normalPointsList::-webkit-scrollbar-track {
-                background: #1a1a1a;
+            .normal-compute-btn:hover {
+                background: #60a5fa;
             }
-            #normalPointsList::-webkit-scrollbar-thumb {
-                background: #404040;
+            .normal-result {
+                margin-top: 10px;
+                padding: 10px 12px;
+                font-size: 12px;
+                color: #94a3b8;
+                background: rgba(51, 65, 85, 0.5);
+                border-radius: 8px;
+                display: none;
+            }
+            .normal-result strong { color: #60a5fa; }
+            .normal-list-items::-webkit-scrollbar { width: 6px; }
+            .normal-list-items::-webkit-scrollbar-thumb {
+                background: rgba(100, 116, 139, 0.5);
                 border-radius: 3px;
             }
         `;
@@ -160,7 +178,7 @@ export class NormalListUI {
 
     showNormalResult(normal: { x: number; y: number; z: number }): void {
         this.resultElement.style.display = 'block';
-        this.resultElement.innerHTML = `<strong style="color:#4fc3f7;">Normal:</strong> (${normal.x.toFixed(4)}, ${normal.y.toFixed(4)}, ${normal.z.toFixed(4)})`;
+        this.resultElement.innerHTML = `<strong>Normal:</strong> (${normal.x.toFixed(4)}, ${normal.y.toFixed(4)}, ${normal.z.toFixed(4)})`;
     }
 
     clearResult(): void {

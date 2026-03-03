@@ -18,7 +18,7 @@
             const posterUrl = url.searchParams.get('poster');
             const skyboxUrl = url.searchParams.get('skybox');
             const settingsUrl = url.searchParams.has('settings') ? url.searchParams.get('settings') : './settings.json';
-            const contentUrl = url.searchParams.has('content') ? url.searchParams.get('content') : './point_cloud_real2sim.ply';
+            const contentUrl = url.searchParams.has('content') ? url.searchParams.get('content') : './point_cloud.ply';
 
             const sseConfig = {
                 poster: posterUrl && createImage(posterUrl),
@@ -66,38 +66,8 @@
             </div>
 
             <div id="controlsWrap" class="faded-in">
-
-                <!-- Timeline Panel -->
-                <div id="timelineContainer" class="hidden">
-                    <div id="line"></div>
-                    <div id="handle"></div>
-                    <div id="time" class="hidden">0:00</div>
-                </div>
-
-                <!-- Buttons Panel -->
                 <div id="buttonsContainer">
-                    <button id="play" class="controlButton hidden">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
-                            <g class='stroke'><use href="#playIcon"/></g>
-                            <g class='fill'><use href="#playIcon"/></g>
-                        </svg>
-                    </button>
-                    <button id="pause" class="controlButton hidden">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24px" height="24px">
-                            <g class='stroke'><use href="#pauseIcon"/></g>
-                            <g class='fill'><use href="#pauseIcon"/></g>
-                        </svg>
-                    </button>
-
                     <div class="spacer"></div>
-
-                    <button id="orbitCamera" class="controlButton toggle left">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
-                            <g class='stroke'><use href="#orbitIcon"/></g>
-                            <g class='fill'><use href="#orbitIcon"/></g>
-                        </svg>
-                    </button>
-
                     <button id="arMode" class="controlButton hidden">
                         <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28">
                             <g class='stroke'><use href="#arIcon"/></g>
@@ -141,66 +111,72 @@
 
             <!-- Settings Panel -->
             <div id="settingsPanel" class="hidden">
-                <div class="settingsRow">
-                    <div id="hqCheck" class="checkMark">✓</div>
-                    <div id="hqOption">High Quality Render</div>
+                <div class="settingsSection">
+                    <div class="settingsSectionTitle">Camera</div>
+                    <div class="settingsRow" style="flex-wrap: wrap; gap: 8px;">
+                        <button id="frameTop" class="settingsBtn" title="Frame Scene (F)">Frame</button>
+                        <button id="resetTop" class="settingsBtn" title="Reset View (R)">Reset</button>
+                        <button id="centersToggle" class="settingsBtn toggle" title="Centers">Centers</button>
+                        <button id="filterToggle" class="settingsBtn toggle" title="Filter">Filter</button>
+                    </div>
                 </div>
-                <div class="settingsRow">
-                    <div id="lqCheck" class="checkMark">✓</div>
-                    <div id="lqOption">Low Quality Render</div>
+                <div class="settingsSection">
+                    <div class="settingsSectionTitle">Render</div>
+                    <div class="settingsRow" data-option="hq">
+                        <div id="hqCheck" class="checkMark">✓</div>
+                        <div id="hqOption">High Quality</div>
+                    </div>
+                    <div class="settingsRow" data-option="lq">
+                        <div id="lqCheck" class="checkMark">✓</div>
+                        <div id="lqOption">Low Quality</div>
+                    </div>
+                    <div class="settingsRow" data-option="off">
+                        <div id="offCheck" class="checkMark">✓</div>
+                        <div id="offOption">Off</div>
+                    </div>
+                    <div class="settingsRow" data-option="depth">
+                        <div id="depthCheck" class="checkMark">✓</div>
+                        <div id="depthOption">Depth</div>
+                    </div>
                 </div>
-                <div class="settingsRow">
-                    <div id="offCheck" class="checkMark">✓</div>
-                    <div id="offOption">No Render</div>
+                <div class="settingsSection" id="centersSection">
+                    <div class="settingsRow settingsToggleRow" id="centersToggle" data-toggle="centers">
+                        <div id="centersCheck" class="checkMark">✓</div>
+                        <div id="centersOption">Centers</div>
+                    </div>
+                    <div id="centersSettings" class="settingsSubSection" style="display: none;">
+                        <div class="settingsRow">
+                            <label for="centersSizeSlider">Point Size</label>
+                            <input type="range" id="centersSizeSlider" min="0.6" max="0.9" step="0.01" value="0.75">
+                            <span id="centersSizeValue">0.75</span>
+                        </div>
+                    </div>
                 </div>
-                <div class="settingsRow">
-                    <div id="depthCheck" class="checkMark">✓</div>
-                    <div id="depthOption">Depth View</div>
+                <div class="settingsSection" id="filterSection">
+                    <div class="settingsRow settingsToggleRow" id="filterToggle" data-toggle="filter">
+                        <div id="filterCheck" class="checkMark">✓</div>
+                        <div id="filterOption">Filter</div>
+                    </div>
+                    <div id="filterSettings" class="settingsSubSection" style="display: none;">
+                        <div class="settingsRow">
+                            <label for="depthFilterSlider">Depth Range</label>
+                            <input type="range" id="depthFilterSlider" min="-0.0005" max="0.001" step="0.0001" value="0.00025" title="Arrow keys or +/- to adjust">
+                            <span id="depthFilterValue">0.0003</span>
+                        </div>
+                    <div class="settingsRow">
+                        <div id="showFilteredCheck" class="checkMark">✓</div>
+                        <div id="showFilteredOption">Show Filtered</div>
+                    </div>
+                    <div class="settingsRow" id="filterStatsRow" style="display: none;">
+                        <span>Total <strong id="filterStatsTotal">0</strong></span>
+                        <span>Visible <strong id="filterStatsVisible">0</strong></span>
+                        <span>Filtered <strong id="filterStatsFiltered">0</strong></span>
+                    </div>
                 </div>
-                <div class="divider"></div>
-                <div class="settingsRow">
-                    <div id="centersCheck" class="checkMark">✓</div>
-                    <div id="centersOption">Show Centers</div>
-                </div>
-                <div class="settingsRow">
-                    <label for="centersSizeSlider" style="flex: 1; margin-right: 10px;">Point Size</label>
-                    <input type="range" id="centersSizeSlider" min="0.8" max="1.2" step="0.01" value="1.0" style="flex: 2;">
-                    <span id="centersSizeValue" style="min-width: 50px; text-align: right;">1.0</span>
-                </div>
-                <div class="settingsRow">
-                    <div id="depthFilterCheck" class="checkMark">✓</div>
-                    <div id="depthFilterOption">Depth Filter</div>
-                </div>
-                <div class="settingsRow">
-                    <label for="depthFilterSlider" style="flex: 1; margin-right: 10px;">Depth Range</label>
-                    <input type="range" id="depthFilterSlider" min="-0.01" max="0.01" step="0.0001" value="0.002" style="flex: 2;" title="Use arrow keys or +/- to adjust by 0.001">
-                    <span id="depthFilterValue" style="min-width: 50px; text-align: right;">0.0020</span>
-                </div>
-                <div class="settingsRow">
-                    <div id="showFilteredCheck" class="checkMark">✓</div>
-                    <div id="showFilteredOption">Show Filtered Points</div>
-                </div>
-                <div class="settingsRow">
-                    <div id="freezeFilterCheck" class="checkMark">✓</div>
-                    <div id="freezeFilterOption">Freeze Filtered Points</div>
-                </div>
-                <div class="settingsRow">
-                    <div id="showDepthVizCheck" class="checkMark">✓</div>
-                    <div id="showDepthVizOption">Show Depth Visualization</div>
-                </div>
-                <div class="settingsRow">
-                    <div id="freezeDepthCheck" class="checkMark">✓</div>
-                    <div id="freezeDepthOption">Freeze Depth</div>
-                </div>
-                <div class="settingsRow" id="filterStatsRow" style="display: none; padding: 5px 10px; font-size: 12px; color: #888;">
-                    <div style="flex: 1;">Total: <span id="filterStatsTotal">0</span></div>
-                    <div style="flex: 1;">Visible: <span id="filterStatsVisible" style="color: #0f0;">0</span></div>
-                    <div style="flex: 1;">Filtered: <span id="filterStatsFiltered" style="color: #f00;">0</span></div>
-                </div>
-                <div class="divider"></div>
-                <div class="settingsRow">
-                    <button id="frame">Frame</button>
-                    <button id="reset">Reset</button>
+                <div class="settingsSection">
+                    <div class="settingsSectionTitle">View</div>
+                    <button id="saveResetView" class="settingsBtn">Save Default</button>
+                    <button id="restoreDefaultView" class="settingsBtn">Restore Factory</button>
                 </div>
             </div>
 
@@ -213,73 +189,21 @@
                     </div>
                     <div id="infoPanels">
                         <div id="desktopInfoPanel">
-                            <div class="control-spacer"></div>
-                            <h1>Orbit Mode</h1>
-                            <div class="control-item">
-                                <span class="control-action">Orbit</span>
-                                <span class="control-key">Left Mouse</span>
-                            </div>
-                            <div class="control-item">
-                                <span class="control-action">Pan</span>
-                                <span class="control-key">Right Mouse</span>
-                            </div>
-                            <div class="control-item">
-                                <span class="control-action">Zoom</span>
-                                <span class="control-key">Mouse Wheel</span>
-                            </div>
-                            <div class="control-item">
-                                <span class="control-action">Set Focus</span>
-                                <span class="control-key">Double Click</span>
-                            </div>
-                            <div class="control-spacer"></div>
-                            <h1>Fly Mode</h1>
-                            <div class="control-item">
-                                <span class="control-action">Look Around</span>
-                                <span class="control-key">Left Mouse</span>
-                            </div>
-                            <div class="control-item">
-                                <span class="control-action">Fly</span>
-                                <span class="control-key">W,S,A,D</span>
-                            </div>
-                            <div class="control-spacer"></div>
-                            <div class="control-item">
-                                <span class="control-action">Frame Scene</span>
-                                <span class="control-key">F</span>
-                            </div>
-                            <div class="control-item">
-                                <span class="control-action">Reset Camera</span>
-                                <span class="control-key">R</span>
-                            </div>
+                            <h1>Orbit</h1>
+                            <div class="control-item"><span class="control-action">Rotate</span><span class="control-key">Left drag</span></div>
+                            <div class="control-item"><span class="control-action">Pan</span><span class="control-key">Right drag</span></div>
+                            <div class="control-item"><span class="control-action">Zoom</span><span class="control-key">Scroll</span></div>
+                            <div class="control-item"><span class="control-action">Focus</span><span class="control-key">Double click</span></div>
+                            <h1>Shortcuts</h1>
+                            <div class="control-item"><span class="control-action">Frame</span><span class="control-key">F</span></div>
+                            <div class="control-item"><span class="control-action">Reset</span><span class="control-key">R</span></div>
                         </div>
                         <div id="touchInfoPanel" class="hidden">
-                            <div class="control-spacer"></div>
-                            <h1>Orbit Mode</h1>
-                            <div class="control-item">
-                                <span class="control-action">Orbit</span>
-                                <span class="control-key">One Finger Drag</span>
-                            </div>
-                            <div class="control-item">
-                                <span class="control-action">Pan</span>
-                                <span class="control-key">Two Finger Drag</span>
-                            </div>
-                            <div class="control-item">
-                                <span class="control-action">Zoom</span>
-                                <span class="control-key">Pinch</span>
-                            </div>
-                            <div class="control-item">
-                                <span class="control-action">Set Focus</span>
-                                <span class="control-key">Double Tap</span>
-                            </div>
-                            <div class="control-spacer"></div>
-                            <h1>Fly Mode</h1>
-                            <div class="control-item">
-                                <span class="control-action">Look Around</span>
-                                <span class="control-key">Touch on Right</span>
-                            </div>
-                            <div class="control-item">
-                                <span class="control-action">Fly</span>
-                                <span class="control-key">Touch on Left</span>
-                            </div>
+                            <h1>Orbit</h1>
+                            <div class="control-item"><span class="control-action">Rotate</span><span class="control-key">1 finger</span></div>
+                            <div class="control-item"><span class="control-action">Pan</span><span class="control-key">2 fingers</span></div>
+                            <div class="control-item"><span class="control-action">Zoom</span><span class="control-key">Pinch</span></div>
+                            <div class="control-item"><span class="control-action">Focus</span><span class="control-key">Double tap</span></div>
                         </div>
                     </div>
                 </div>

@@ -144,23 +144,19 @@ const initUI = (global: Global) => {
     const docRoot = document.documentElement;
     const dom = [
         'ui',
+        'frameTop', 'resetTop', 'centersToggle', 'filterToggle',
+        'centersCheck', 'filterCheck',
         'controlsWrap',
         'arMode', 'vrMode',
         'enterFullscreen', 'exitFullscreen',
         'info', 'infoPanel', 'desktopTab', 'touchTab', 'desktopInfoPanel', 'touchInfoPanel',
-        'timelineContainer', 'handle', 'time',
-        'buttonContainer',
-        'play', 'pause',
         'settings', 'settingsPanel',
-        'orbitCamera', 'flyCamera',
         'hqCheck', 'hqOption', 'lqCheck', 'lqOption', 'offCheck', 'offOption', 'depthCheck', 'depthOption',
         'showFilteredCheck', 'showFilteredOption', 'filterStatsRow', 'filterStatsTotal', 'filterStatsVisible', 'filterStatsFiltered',
-        'freezeFilterCheck', 'freezeFilterOption',
-        'showDepthVizCheck', 'showDepthVizOption',
-        'freezeDepthCheck', 'freezeDepthOption',
-        'centersCheck', 'centersOption', 'centersSizeSlider', 'centersSizeValue',
-        'depthFilterCheck', 'depthFilterOption', 'depthFilterSlider', 'depthFilterValue',
-        'reset', 'frame',
+        'centersSettings', 'filterSettings',
+        'centersSizeSlider', 'centersSizeValue',
+        'depthFilterSlider', 'depthFilterValue',
+        'saveResetView', 'restoreDefaultView',
         'loadingText', 'loadingBar',
         'joystickBase', 'joystick',
         'tooltip'
@@ -170,27 +166,29 @@ const initUI = (global: Global) => {
     }, {}) as Record<string, HTMLElement> & {
         centersSizeSlider: HTMLInputElement;
         depthFilterSlider: HTMLInputElement;
+        centersSettings: HTMLElement;
+        filterSettings: HTMLElement;
         showFilteredCheck: HTMLElement;
         showFilteredOption: HTMLElement;
-        showDepthVizCheck: HTMLElement;
-        showDepthVizOption: HTMLElement;
-        freezeDepthCheck: HTMLElement;
-        freezeDepthOption: HTMLElement;
-        freezeFilterCheck: HTMLElement;
-        freezeFilterOption: HTMLElement;
         filterStatsRow: HTMLElement;
         filterStatsTotal: HTMLElement;
         filterStatsVisible: HTMLElement;
         filterStatsFiltered: HTMLElement;
+        centersToggle: HTMLElement;
+        filterToggle: HTMLElement;
+        centersCheck: HTMLElement;
+        filterCheck: HTMLElement;
+        frameTop: HTMLElement;
+        resetTop: HTMLElement;
     };
 
     // Handle loading progress updates
     events.on('progress:changed', (progress) => {
         dom.loadingText.textContent = `${progress}%`;
         if (progress < 100) {
-            dom.loadingBar.style.backgroundImage = `linear-gradient(90deg, #F60 0%, #F60 ${progress}%, white ${progress}%, white 100%)`;
+            dom.loadingBar.style.backgroundImage = `linear-gradient(90deg, #3b82f6 0%, #3b82f6 ${progress}%, #334155 ${progress}%, #334155 100%)`;
         } else {
-            dom.loadingBar.style.backgroundImage = 'linear-gradient(90deg, #F60 0%, #F60 100%)';
+            dom.loadingBar.style.backgroundImage = 'linear-gradient(90deg, #3b82f6 0%, #3b82f6 100%)';
         }
     });
 
@@ -353,102 +351,8 @@ const initUI = (global: Global) => {
 
     events.on('inputEvent', showUI);
 
-    // Animation controls
-    events.on('hasAnimation:changed', () => {
-        // Start and Stop animation
-        dom.play.addEventListener('click', () => {
-            state.cameraMode = 'anim';
-            state.animationPaused = false;
-        });
-
-        dom.pause.addEventListener('click', () => {
-            state.cameraMode = 'anim';
-            state.animationPaused = true;
-        });
-
-        const updatePlayPause = () => {
-            if (state.cameraMode !== 'anim' || state.animationPaused) {
-                dom.play.classList.remove('hidden');
-                dom.pause.classList.add('hidden');
-            } else {
-                dom.play.classList.add('hidden');
-                dom.pause.classList.remove('hidden');
-            }
-
-            if (state.cameraMode === 'anim') {
-                dom.timelineContainer.classList.remove('hidden');
-            } else {
-                dom.timelineContainer.classList.add('hidden');
-            }
-        };
-
-        // Update UI on animation changes
-        events.on('cameraMode:changed', updatePlayPause);
-        events.on('animationPaused:changed', updatePlayPause);
-
-        const updateSlider = () => {
-            dom.handle.style.left = `${state.animationTime / state.animationDuration * 100}%`;
-            dom.time.style.left = `${state.animationTime / state.animationDuration * 100}%`;
-            dom.time.innerText = `${state.animationTime.toFixed(1)}s`;
-        };
-
-        events.on('animationTime:changed', updateSlider);
-        events.on('animationLength:changed', updateSlider);
-
-        const handleScrub = (event: PointerEvent) => {
-            const rect = dom.timelineContainer.getBoundingClientRect();
-            const t = Math.max(0, Math.min(rect.width - 1, event.clientX - rect.left)) / rect.width;
-            events.fire('scrubAnim', state.animationDuration * t);
-            showUI();
-        };
-
-        let paused = false;
-        let captured = false;
-
-        dom.timelineContainer.addEventListener('pointerdown', (event: PointerEvent) => {
-            if (!captured) {
-                handleScrub(event);
-                dom.timelineContainer.setPointerCapture(event.pointerId);
-                dom.time.classList.remove('hidden');
-                paused = state.animationPaused;
-                state.animationPaused = true;
-                captured = true;
-            }
-        });
-
-        dom.timelineContainer.addEventListener('pointermove', (event: PointerEvent) => {
-            if (captured) {
-                handleScrub(event);
-            }
-        });
-
-        dom.timelineContainer.addEventListener('pointerup', (event) => {
-            if (captured) {
-                dom.timelineContainer.releasePointerCapture(event.pointerId);
-                dom.time.classList.add('hidden');
-                state.animationPaused = paused;
-                captured = false;
-            }
-        });
-    });
-
-    // Camera mode UI
-    events.on('cameraMode:changed', () => {
-        dom.orbitCamera.classList[state.cameraMode === 'orbit' ? 'add' : 'remove']('active');
-        // dom.flyCamera.classList[state.cameraMode === 'fly' ? 'add' : 'remove']('active'); // Removed fly mode
-    });
-
     dom.settings.addEventListener('click', () => {
         dom.settingsPanel.classList.toggle('hidden');
-    });
-
-    // Centers display toggle
-    dom.centersOption.addEventListener('click', () => {
-        state.showCenters = !state.showCenters;
-    });
-
-    events.on('showCenters:changed', (value: boolean) => {
-        dom.centersCheck.classList[value ? 'add' : 'remove']('active');
     });
 
     // Centers point size slider
@@ -462,11 +366,6 @@ const initUI = (global: Global) => {
     events.on('centersPointSize:changed', (value: number) => {
         dom.centersSizeSlider.value = value.toString();
         dom.centersSizeValue.textContent = value.toFixed(2);
-    });
-
-    // Depth filter toggle
-    dom.depthFilterOption.addEventListener('click', () => {
-        events.fire('depthFilter:toggle');
     });
 
     // Depth filter slider
@@ -505,10 +404,8 @@ const initUI = (global: Global) => {
     // Make slider focusable for keyboard control
     dom.depthFilterSlider.setAttribute('tabindex', '0');
 
-    // Update depth filter checkmark when state changes
-    events.on('depthFilterEnabled:changed', (value: boolean) => {
-        dom.depthFilterCheck.classList[value ? 'add' : 'remove']('active');
-    });
+    // Track show filtered points state locally for UI visibility logic
+    let showFilteredPoints = false;
 
     // Show filtered points toggle
     dom.showFilteredOption.addEventListener('click', () => {
@@ -517,37 +414,10 @@ const initUI = (global: Global) => {
 
     // Update show filtered points checkmark when state changes
     events.on('showFilteredPoints:changed', (value: boolean) => {
+        showFilteredPoints = value;
         dom.showFilteredCheck.classList[value ? 'add' : 'remove']('active');
-        dom.filterStatsRow.style.display = value ? 'flex' : 'none';
-    });
-
-    // Show depth visualization toggle
-    dom.showDepthVizOption.addEventListener('click', () => {
-        events.fire('showDepthVisualization:toggle');
-    });
-
-    // Update show depth visualization checkmark when state changes
-    events.on('showDepthVisualization:changed', (value: boolean) => {
-        dom.showDepthVizCheck.classList[value ? 'add' : 'remove']('active');
-    });
-
-    // Freeze depth toggle
-    dom.freezeDepthOption.addEventListener('click', () => {
-        events.fire('freezeDepth:toggle');
-    });
-
-    // Update freeze depth checkmark when state changes
-    events.on('freezeDepth:changed', (value: boolean) => {
-        dom.freezeDepthCheck.classList[value ? 'add' : 'remove']('active');
-    });
-
-    // Freeze filter toggle
-    dom.freezeFilterOption.addEventListener('click', () => {
-        events.fire('freezeFilter:toggle');
-    });
-
-    events.on('freezeFilter:changed', (value: boolean) => {
-        dom.freezeFilterCheck.classList[value ? 'add' : 'remove']('active');
+        // Show/hide filter statistics based on Show Filtered Points state
+        dom.filterStatsRow.style.display = (value && depthFilterEnabled) ? 'flex' : 'none';
     });
 
     // Update filter statistics
@@ -557,21 +427,64 @@ const initUI = (global: Global) => {
         dom.filterStatsFiltered.textContent = stats.filtered.toLocaleString();
     });
 
-    dom.orbitCamera.addEventListener('click', () => {
-        state.cameraMode = 'orbit';
+    // Top toolbar - Camera tools
+    dom.frameTop.addEventListener('click', (event) => {
+        events.fire('inputEvent', 'frame', event);
     });
+
+    dom.resetTop.addEventListener('click', (event) => {
+        events.fire('inputEvent', 'reset', event);
+    });
+
+    // Top toolbar - Centers toggle
+    dom.centersToggle.addEventListener('click', () => {
+        state.showCenters = !state.showCenters;
+    });
+
+    events.on('showCenters:changed', (value: boolean) => {
+        dom.centersCheck.classList[value ? 'add' : 'remove']('active');
+        dom.centersSettings.style.display = value ? 'block' : 'none';
+    });
+
+    // Initialize Centers
+    dom.centersCheck.classList[state.showCenters ? 'add' : 'remove']('active');
+    dom.centersSettings.style.display = state.showCenters ? 'block' : 'none';
+
+    // Camera Gizmo toggle (keyboard shortcut 'G')
+    events.on('keyboard:g', () => {
+        state.showCameraGizmo = !state.showCameraGizmo;
+        events.fire('showCameraGizmo:changed', state.showCameraGizmo);
+        console.log('Camera gizmo visibility:', state.showCameraGizmo);
+    });
+
+    // Filter toggle
+    dom.filterToggle.addEventListener('click', () => {
+        events.fire('depthFilter:toggle');
+    });
+
+    // Track depth filter state for UI
+    let depthFilterEnabled = false;
+    events.on('depthFilterEnabled:changed', (value: boolean) => {
+        depthFilterEnabled = value;
+        dom.filterCheck.classList[value ? 'add' : 'remove']('active');
+        dom.filterSettings.style.display = value ? 'block' : 'none';
+    });
+
+    // Initialize Filter
+    dom.filterCheck.classList.remove('active');
+    dom.filterSettings.style.display = 'none';
 
     // Fly camera button removed (only orbit mode, matching Three.js OrbitControls)
     // dom.flyCamera.addEventListener('click', () => {
     //     state.cameraMode = 'fly';
     // });
 
-    dom.reset.addEventListener('click', (event) => {
-        events.fire('inputEvent', 'reset', event);
+    dom.saveResetView.addEventListener('click', () => {
+        events.fire('saveResetView');
     });
 
-    dom.frame.addEventListener('click', (event) => {
-        events.fire('inputEvent', 'frame', event);
+    dom.restoreDefaultView.addEventListener('click', () => {
+        events.fire('restoreDefaultResetView');
     });
 
     // Initialize touch joystick for fly mode
@@ -585,12 +498,8 @@ const initUI = (global: Global) => {
     // tooltips
     const tooltip = new Tooltip(dom.tooltip);
 
-    tooltip.register(dom.play, 'Play', 'top');
-    tooltip.register(dom.pause, 'Pause', 'top');
-    tooltip.register(dom.orbitCamera, 'Orbit Camera', 'top');
-    // tooltip.register(dom.flyCamera, 'Fly Camera', 'top'); // Removed fly mode
-    tooltip.register(dom.reset, 'Reset Camera', 'bottom');
-    tooltip.register(dom.frame, 'Frame Scene', 'bottom');
+    tooltip.register(dom.saveResetView, 'Save Current View as Default Reset Position', 'bottom');
+    tooltip.register(dom.restoreDefaultView, 'Restore Factory Default View', 'bottom');
     tooltip.register(dom.settings, 'Settings', 'top');
     tooltip.register(dom.info, 'Help', 'top');
     tooltip.register(dom.arMode, 'Enter AR', 'top');

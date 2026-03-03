@@ -62,7 +62,8 @@ const loadGsplatAsset = (app: AppBase, filename: string, contentUrl: string, c: 
     return new Promise<Entity>((resolve, reject) => {
         asset.on('load', () => {
             const entity = new Entity('gsplat');
-            entity.setLocalEulerAngles(0, 0, 180);
+            // Remove Z-180° rotation to match XML camera coordinate system
+            // entity.setLocalEulerAngles(0, 0, 180);
             entity.addComponent('gsplat', {
                 unified: unified || filename.toLowerCase().endsWith('lod-meta.json'),
                 asset
@@ -136,7 +137,8 @@ const main = (app: AppBase, camera: Entity, settingsJson: any, config: Config) =
         isFullscreen: false,
         controlsHidden: false,
         showCenters: false,
-        centersPointSize: 5
+        centersPointSize: 5,
+        showCameraGizmo: true
     });
 
     const global: Global = {

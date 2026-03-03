@@ -40,6 +40,7 @@ type State = {
     controlsHidden: boolean;
     showCenters: boolean;
     centersPointSize: number;
+    showCameraGizmo: boolean;
 };
 
 type Global = {

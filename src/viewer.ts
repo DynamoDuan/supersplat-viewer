@@ -20,6 +20,7 @@ import {
     TONEMAP_ACES2,
     TONEMAP_NEUTRAL,
     Vec3,
+    Quat,
     GSplatComponent,
     platform
 } from 'playcanvas';
@@ -38,6 +39,8 @@ import { NormalMarker } from './normal-marker';
 import { NormalListUI } from './normal-list-ui';
 import { computePCANormalFromPoints, computeCentroid } from './pca-normal';
 import { depthGsplatVS, depthGsplatVS_WGSL } from './shaders/depth-shader';
+import { AxisHelper } from './axis-helper';
+import { CameraGizmo } from './camera-gizmo';
 
 // override global pick to pack depth instead of meshInstance id
 const pickDepthGlsl = /* glsl */ `
@@ -154,6 +157,10 @@ class Viewer {
     eraserActive = false;
 
     private _gsplatMaterial: any = null;
+
+    private axisHelper: AxisHelper | null = null;
+
+    private cameraGizmo: CameraGizmo | null = null;
 
     constructor(global: Global, gsplatLoad: Promise<Entity>, skyboxLoad: Promise<void>) {
         this.global = global;
@@ -321,11 +328,6 @@ class Viewer {
             }
         });
 
-        // unpause the animation on first frame
-        events.on('firstFrame', () => {
-            state.animationPaused = !!config.noanim;
-        });
-
         // Create centers overlay
         this.centersOverlay = new CentersOverlay(app);
 
@@ -442,52 +444,10 @@ class Viewer {
             app.renderNextFrame = true;
         });
 
-        // Show depth visualization toggle
-        let showDepthVisualization = false;
-        events.on('showDepthVisualization:toggle', () => {
-            showDepthVisualization = !showDepthVisualization;
-            this.centersOverlay.setShowDepthVisualization(showDepthVisualization);
-            events.fire('showDepthVisualization:changed', showDepthVisualization);
-            app.renderNextFrame = true;
-        });
-
-        // Freeze depth toggle - back-project alpha-blended depth as a 3D point cloud
-        let depthFrozen = false;
-        events.on('freezeDepth:toggle', async () => {
-            depthFrozen = !depthFrozen;
-            if (depthFrozen) {
-                const pickerRef = (this as any)._picker;
-                if (pickerRef && pickerRef.positionCacheValid && pickerRef.cachedPositions) {
-                    this.centersOverlay.freezeDepth(pickerRef.cachedPositions, camera, pickerRef.cachedOpacities);
-                }
-            } else {
-                this.centersOverlay.unfreezeDepth();
-            }
-            events.fire('freezeDepth:changed', depthFrozen);
-            app.renderNextFrame = true;
-        });
-
-        // Freeze filter toggle - back-project filtered points as a 3D red point cloud
-        let filterFrozen = false;
-        events.on('freezeFilter:toggle', () => {
-            filterFrozen = !filterFrozen;
-            if (filterFrozen) {
-                const pickerRef = (this as any)._picker;
-                if (pickerRef && pickerRef.positionCacheValid && pickerRef.cachedPositions) {
-                    this.centersOverlay.freezeFilter(pickerRef.cachedPositions);
-                }
-            } else {
-                this.centersOverlay.unfreezeFilter();
-            }
-            events.fire('freezeFilter:changed', filterFrozen);
-            app.renderNextFrame = true;
-        });
-
         // Recompute filter when camera moves (debounced)
-        // Also recompute depth visualization if enabled
         let lastCameraData: Float32Array | null = null;
         app.on('framerender', () => {
-            if (!depthFilterEnabled && !showDepthVisualization) return;
+            if (!depthFilterEnabled) return;
             const world = camera.getWorldTransform();
             if (!lastCameraData) {
                 lastCameraData = new Float32Array(world.data);
@@ -502,17 +462,7 @@ class Viewer {
                 }
                 if (changed) {
                     lastCameraData.set(world.data);
-                    if (!depthFrozen) {
-                        scheduleFilterComputation();
-                    }
-
-                    // Also update depth visualization if enabled (but NOT if frozen)
-                    if (showDepthVisualization && !depthFrozen) {
-                        const pickerRef = (this as any)._picker;
-                        if (pickerRef && pickerRef.positionCacheValid && pickerRef.cachedPositions) {
-                            this.centersOverlay.computeDepthVisualization(pickerRef.cachedPositions, camera, pickerRef.cachedOpacities);
-                        }
-                    }
+                    scheduleFilterComputation();
                 }
             }
         });
@@ -525,6 +475,35 @@ class Viewer {
             const gsplat = results[0]?.gsplat as GSplatComponent | null;
 
             if (gsplat) {
+                // Create axis helper to visualize world coordinate system
+                // X=Red, Y=Green, Z=Blue
+                this.axisHelper = new AxisHelper(app, 5.0);
+                console.log('World axes created: X=Red, Y=Green, Z=Blue');
+
+                // Create camera gizmo to visualize fixed camera position
+                // RED CONE points in the camera's forward direction
+                this.cameraGizmo = new CameraGizmo(app.root);
+                const m = [
+                    [0.9786331529531755, 0.03990237507444073, -0.20170511248935927],
+                    [-0.07133697531067347, 0.9859460257592279, -0.15106776705541258],
+                    [0.19284239133149841, 0.16222895781272428, 0.9677259825759287]
+                ];
+                const camPos = new Vec3(0.4214223792319385, 0.5457549945299672, -1.2059909003747704);
+                const camForward = new Vec3(m[0][2], m[1][2], m[2][2]).normalize();
+                const camUp = new Vec3(m[0][1], m[1][1], m[2][1]).normalize();
+                this.cameraGizmo.setPositionAndRotation(camPos, camForward, camUp);
+                console.log('Camera gizmo created - RED CONE shows forward direction');
+
+                // Listen for camera gizmo visibility changes
+                events.on('showCameraGizmo:changed', (value: boolean) => {
+                    if (this.cameraGizmo) {
+                        this.cameraGizmo.setVisible(value);
+                    }
+                });
+
+                // Set initial visibility
+                this.cameraGizmo.setVisible(state.showCameraGizmo);
+
                 // Attach centers overlay to gsplat entity
                 this.centersOverlay.attach(results[0]);
 
@@ -743,13 +722,38 @@ class Viewer {
                 // Add UI buttons
                 const buttonsContainer = document.getElementById('buttonsContainer');
                 if (buttonsContainer) {
-                    // Save JSON button
+                    const selectBtn = document.createElement('button');
+                    selectBtn.id = 'toggleSelectBtn';
+                    selectBtn.className = 'controlButton toggle';
+                    selectBtn.title = 'Select Point';
+                    selectBtn.innerHTML = '📍';
+                    selectBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    buttonsContainer.appendChild(selectBtn);
+
+                    const clearBtn = document.createElement('button');
+                    clearBtn.id = 'clearAllPointsBtn';
+                    clearBtn.className = 'controlButton';
+                    clearBtn.title = 'Clear All';
+                    clearBtn.innerHTML = '🗑️';
+                    clearBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    buttonsContainer.appendChild(clearBtn);
+
                     const saveBtn = document.createElement('button');
                     saveBtn.id = 'savePointsBtn';
                     saveBtn.className = 'controlButton';
-                    saveBtn.title = 'Save Points as JSON';
+                    saveBtn.title = 'Save';
                     saveBtn.innerHTML = '💾';
                     saveBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    buttonsContainer.appendChild(saveBtn);
+
+                    const normalBtn = document.createElement('button');
+                    normalBtn.id = 'toggleNormalBtn';
+                    normalBtn.className = 'controlButton toggle';
+                    normalBtn.title = 'Normal';
+                    normalBtn.innerHTML = '↗';
+                    normalBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    buttonsContainer.appendChild(normalBtn);
+
                     saveBtn.addEventListener('click', () => {
                         const pointsData = this.pointMarker.exportToJSON();
                         const normalData = this.normalMarker.exportToJSON();
@@ -781,130 +785,7 @@ class Viewer {
                         document.body.removeChild(link);
                         URL.revokeObjectURL(url);
                     });
-                    buttonsContainer.appendChild(saveBtn);
 
-                    // Download Point Cloud button (download remaining points after box select and eraser)
-                    const downloadPlyBtn = document.createElement('button');
-                    downloadPlyBtn.id = 'downloadPlyBtn';
-                    downloadPlyBtn.className = 'controlButton';
-                    downloadPlyBtn.title = '下载点云 (下载框选和擦除后剩余的点)';
-                    downloadPlyBtn.innerHTML = '⬇️';
-                    downloadPlyBtn.style.cssText = 'font-size: 20px; padding: 8px;';
-                    downloadPlyBtn.addEventListener('click', async () => {
-                        try {
-                            // Get gsplat entity from the loaded entity
-                            const gsplatEntity = await gsplatLoad;
-                            if (!gsplatEntity) {
-                                alert('点云未加载');
-                                return;
-                            }
-
-                            const gsplat = gsplatEntity.gsplat as GSplatComponent;
-                            if (!gsplat || !gsplat.instance) {
-                                alert('点云实例不可用');
-                                return;
-                            }
-
-                            // Get filter state texture to know which points are kept (G channel: 0 = kept, 255 = erased)
-                            const filterTexture = this.centersOverlay.getFilterStateTexture();
-                            if (!filterTexture) {
-                                alert('过滤状态纹理不可用');
-                                return;
-                            }
-
-                            // Get point positions from picker cache or gsplat resource
-                            const pickerRef = (this as any)._picker;
-                            let positions: Vec3[] | null = null;
-                            
-                            if (pickerRef && pickerRef.cachedPositions && pickerRef.positionCacheValid) {
-                                positions = pickerRef.cachedPositions;
-                            } else {
-                                // Fallback: try to get from gsplat resource
-                                const resource = (gsplat.instance.resource as any);
-                                if (resource && resource.positions) {
-                                    const posArray = new Float32Array(resource.positions);
-                                    positions = [];
-                                    for (let i = 0; i < posArray.length; i += 3) {
-                                        positions.push(new Vec3(posArray[i], posArray[i + 1], posArray[i + 2]));
-                                    }
-                                }
-                            }
-
-                            if (!positions || positions.length === 0) {
-                                alert('无法获取点云位置数据，请等待点云加载完成');
-                                return;
-                            }
-
-                            // Read filter state
-                            const filterPixels = filterTexture.lock();
-                            const numSplats = Math.min(positions.length, filterTexture.width * filterTexture.height);
-
-                            // Collect valid points (G channel = 0 means kept)
-                            // 直接输出模型空间坐标（与原始 PLY 一致）
-                            const validPoints: number[] = [];
-                            let validCount = 0;
-
-                            for (let i = 0; i < numSplats; i++) {
-                                const pixelIdx = i * 4;
-                                const gChannel = filterPixels[pixelIdx + 1]; // G channel: 0 = kept, 255 = erased
-
-                                if (gChannel === 0) { // Point is kept
-                                    const localPos = positions[i];
-                                    validPoints.push(-localPos.x, -localPos.y, localPos.z);
-                                    validCount++;
-                                }
-                            }
-
-                            filterTexture.unlock();
-
-                            if (validCount === 0) {
-                                alert('没有剩余的点可以下载');
-                                return;
-                            }
-
-                            // Build PLY content
-                            let plyContent = 'ply\n';
-                            plyContent += 'format ascii 1.0\n';
-                            plyContent += `element vertex ${validCount}\n`;
-                            plyContent += 'property float x\n';
-                            plyContent += 'property float y\n';
-                            plyContent += 'property float z\n';
-                            plyContent += 'end_header\n';
-
-                            // Write points
-                            for (let i = 0; i < validPoints.length; i += 3) {
-                                const x = validPoints[i];
-                                const y = validPoints[i + 1];
-                                const z = validPoints[i + 2];
-                                plyContent += `${x.toFixed(6)} ${y.toFixed(6)} ${z.toFixed(6)}\n`;
-                            }
-
-                            // Download
-                            const blob = new Blob([plyContent], { type: 'text/plain' });
-                            const url = URL.createObjectURL(blob);
-                            const link = document.createElement('a');
-                            link.href = url;
-                            link.download = `point_cloud_${validCount}_points_${new Date().toISOString().replace(/[:.]/g, '-')}.ply`;
-                            document.body.appendChild(link);
-                            link.click();
-                            document.body.removeChild(link);
-                            URL.revokeObjectURL(url);
-
-                            console.log(`已导出 ${validCount} 个点到 PLY 文件`);
-                        } catch (error) {
-                            console.error('导出 PLY 时出错:', error);
-                            alert(`导出 PLY 时出错: ${error}`);
-                        }
-                    });
-                    buttonsContainer.appendChild(downloadPlyBtn);
-
-                    // Toggle select mode button
-                    const selectBtn = document.createElement('button');
-                    selectBtn.id = 'toggleSelectBtn';
-                    selectBtn.className = 'controlButton toggle right';
-                    selectBtn.title = 'Toggle Point Selection Mode';
-                    selectBtn.innerHTML = '📍';
-                    selectBtn.style.cssText = 'font-size: 20px; padding: 8px; cursor: pointer;';
                     selectBtn.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -918,23 +799,13 @@ class Viewer {
                             selectBtn.classList.remove('active');
                         }
                     });
-                    buttonsContainer.appendChild(selectBtn);
 
-                    // Normal Direction toggle button
-                    const normalBtn = document.createElement('button');
-                    normalBtn.id = 'toggleNormalBtn';
-                    normalBtn.className = 'controlButton';
-                    normalBtn.title = 'Toggle Normal Direction Mode';
-                    normalBtn.innerHTML = '&#x2197;'; // ↗ arrow
-                    normalBtn.style.cssText = 'font-size: 20px; padding: 8px; cursor: pointer;';
                     normalBtn.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
                         annotationMode.isNormal = !annotationMode.isNormal;
                         if (annotationMode.isNormal) {
                             normalBtn.classList.add('active');
-                            normalBtn.style.background = '#007acc';
-                            normalBtn.style.color = '#fff';
                             // Switch panels
                             if (pointListContainer) pointListContainer.style.display = 'none';
                             if (normalListContainer) normalListContainer.style.display = '';
@@ -943,8 +814,6 @@ class Viewer {
                             this.normalMarker.show();
                         } else {
                             normalBtn.classList.remove('active');
-                            normalBtn.style.background = '';
-                            normalBtn.style.color = '';
                             // Switch panels back
                             if (pointListContainer) pointListContainer.style.display = '';
                             if (normalListContainer) normalListContainer.style.display = 'none';
@@ -954,7 +823,6 @@ class Viewer {
                         }
                         app.renderNextFrame = true;
                     });
-                    buttonsContainer.appendChild(normalBtn);
 
                     // Eraser tool button
                     const eraserBtn = document.createElement('button');
@@ -1335,26 +1203,6 @@ class Viewer {
                         };
                     }
 
-                    // Delete last point button
-                    const deleteBtn = document.createElement('button');
-                    deleteBtn.id = 'deleteLastPointBtn';
-                    deleteBtn.className = 'controlButton';
-                    deleteBtn.title = 'Delete Last Point';
-                    deleteBtn.innerHTML = '⌫';
-                    deleteBtn.style.cssText = 'font-size: 20px; padding: 8px;';
-                    deleteBtn.addEventListener('click', () => {
-                        this.pointMarker.deleteLastPoint();
-                        app.renderNextFrame = true;
-                    });
-                    buttonsContainer.appendChild(deleteBtn);
-
-                    // Clear all button
-                    const clearBtn = document.createElement('button');
-                    clearBtn.id = 'clearAllPointsBtn';
-                    clearBtn.className = 'controlButton';
-                    clearBtn.title = 'Clear All Points';
-                    clearBtn.innerHTML = '🗑️';
-                    clearBtn.style.cssText = 'font-size: 20px; padding: 8px;';
                     clearBtn.addEventListener('click', () => {
                         if (confirm('Clear all marked points?')) {
                             this.pointMarker.clearAll();
@@ -1363,7 +1211,6 @@ class Viewer {
                             app.renderNextFrame = true;
                         }
                     });
-                    buttonsContainer.appendChild(clearBtn);
 
                     // Load JSON button (hidden file input)
                     const loadInput = document.createElement('input');
@@ -1487,6 +1334,18 @@ class Viewer {
                     loadBtn.style.cssText = 'font-size: 20px; padding: 8px;';
                     loadBtn.addEventListener('click', () => loadInput.click());
                     buttonsContainer.appendChild(loadBtn);
+
+                    // Reorder buttons: point tools, eraser, box select, etc.
+                    const buttonOrder = [
+                        'toggleSelectBtn', 'clearAllPointsBtn', 'savePointsBtn', 'toggleNormalBtn',
+                        'toggleEraserBtn', 'boxSelectBtn', 'eraserSliderContainer', 'undoEraserBtn',
+                        'applyEraseBtn', 'loadPointsBtn'
+                    ];
+                    buttonOrder.forEach(id => {
+                        const el = document.getElementById(id);
+                        if (el) buttonsContainer.appendChild(el);
+                    });
+                    loadBtn.style.display = 'none';
                 }
             }
 
@@ -1620,6 +1479,26 @@ class Viewer {
                 eventHandler.on('frame:ready', readyHandler);
             }
         });
+    }
+
+    updateCameraGizmo() {
+        if (!this.cameraGizmo) return;
+
+        // Get fixed camera position and orientation from camera manager
+        const m = [
+            [0.9786331529531755, 0.03990237507444073, -0.20170511248935927],
+            [-0.07133697531067347, 0.9859460257592279, -0.15106776705541258],
+            [0.19284239133149841, 0.16222895781272428, 0.9677259825759287]
+        ];
+
+        const position = new Vec3(0.4214223792319385, 0.5457549945299672, -1.2059909003747704);
+
+        // Extract forward and up vectors from rotation matrix
+        // Assuming columns are right, up, forward
+        const forward = new Vec3(m[0][2], m[1][2], m[2][2]).normalize();
+        const up = new Vec3(m[0][1], m[1][1], m[2][1]).normalize();
+
+        this.cameraGizmo.setPositionAndRotation(position, forward, up);
     }
 
     // configure camera based on application mode and post process settings

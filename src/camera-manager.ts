@@ -1,24 +1,75 @@
 import {
     type BoundingBox,
+    Mat4,
+    Quat,
     Vec3
 } from 'playcanvas';
 
-import { createRotateTrack } from './animation/create-rotate-track';
-import { AnimController } from './cameras/anim-controller';
-import { Camera, type CameraFrame, type CameraController } from './cameras/camera';
+import { vecToAngles } from './core/math';
+import { Camera, type CameraFrame } from './cameras/camera';
 import { OrbitController } from './cameras/orbit-controller';
-import { easeOut } from './core/math';
 import { Annotation } from './settings';
-import { CameraMode, Global } from './types';
+import { Global } from './types';
 
 const tmpCamera = new Camera();
 const tmpv = new Vec3();
+
+// Fixed camera for real2sim: pos, rotation matrix, fov.
+const FIXED_CAMERA = {
+    pos: [0.4214223792319385, 0.5457549945299672, -1.2059909003747704] as [number, number, number],
+    rotationMatrix: [
+        [0.9786331529531755, 0.03990237507444073, -0.20170511248935927],
+        [-0.07133697531067347, 0.9859460257592279, -0.15106776705541258],
+        [0.19284239133149841, 0.16222895781272428, 0.9677259825759287]
+    ] as [[number, number, number], [number, number, number], [number, number, number]],
+    fovy: 44
+};
 
 const createCamera = (position: Vec3, target: Vec3, fov: number) => {
     const result = new Camera();
     result.look(position, target);
     result.fov = fov;
     return result;
+};
+
+const createFixedCamera = (): Camera => {
+    const cam = new Camera();
+
+    cam.position.set(FIXED_CAMERA.pos[0], FIXED_CAMERA.pos[1], FIXED_CAMERA.pos[2]);
+    cam.fov = FIXED_CAMERA.fovy;
+
+    const m = FIXED_CAMERA.rotationMatrix;
+
+    // Extract vectors EXACTLY like the gizmo does
+    const forward = new Vec3(m[0][2], m[1][2], m[2][2]).normalize();
+    const up = new Vec3(m[0][1], m[1][1], m[2][1]).normalize();
+    const right = new Vec3(m[0][0], m[1][0], m[2][0]).normalize();
+
+    // Build rotation matrix from these vectors
+    // Camera looks in -Z direction, so we need to negate forward
+    const mat = new Mat4();
+    // Right vector (X axis)
+    mat.data[0] = right.x; mat.data[1] = right.y; mat.data[2] = right.z; mat.data[3] = 0;
+    // Up vector (Y axis)
+    mat.data[4] = up.x; mat.data[5] = up.y; mat.data[6] = up.z; mat.data[7] = 0;
+    // Negative forward vector (Z axis) because camera looks in -Z
+    mat.data[8] = -forward.x; mat.data[9] = -forward.y; mat.data[10] = -forward.z; mat.data[11] = 0;
+    mat.data[12] = 0; mat.data[13] = 0; mat.data[14] = 0; mat.data[15] = 1;
+
+    const quat = new Quat();
+    quat.setFromMat4(mat);
+    quat.getEulerAngles(cam.angles);
+
+    console.log('=== Fixed Camera Debug ===');
+    console.log('Position:', cam.position);
+    console.log('Forward:', forward);
+    console.log('Up:', up);
+    console.log('Right:', right);
+    console.log('Angles:', cam.angles);
+
+    cam.distance = 1.0;
+
+    return cam;
 };
 
 const createFrameCamera = (bbox: BoundingBox, fov: number) => {
@@ -34,169 +85,70 @@ const createFrameCamera = (bbox: BoundingBox, fov: number) => {
 class CameraManager {
     update: (deltaTime: number, cameraFrame: CameraFrame) => void;
 
-    // holds the camera state
     camera = new Camera();
 
+    private savedResetCamera: Camera | null = null;
+
     constructor(global: Global, bbox: BoundingBox) {
-        const { events, settings, state } = global;
+        const { events, settings } = global;
 
         const camera0 = settings.cameras[0].initial;
         const frameCamera = createFrameCamera(bbox, camera0.fov);
-        const resetCamera = createCamera(new Vec3(camera0.position), new Vec3(camera0.target), camera0.fov);
 
-        const getAnimTrack = (initial: Camera, isObjectExperience: boolean) => {
-            const { animTracks } = settings;
+        // Use fixed camera as default reset position
+        const fixedCamera = createFixedCamera();
+        const defaultResetCamera = fixedCamera;
+        let resetCamera = defaultResetCamera;
 
-            // extract the camera animation track from settings
-            if (animTracks?.length > 0 && settings.startMode === 'animTrack') {
-                // use the first animTrack
-                return animTracks[0];
-            }
-            return null;
-        };
-
-        // object experience starts outside the bounding box
-        const isObjectExperience = !bbox.containsPoint(resetCamera.position);
-        const animTrack = getAnimTrack(settings.hasStartPose ? resetCamera : frameCamera, isObjectExperience);
-
-        const controllers = {
-            orbit: new OrbitController(),
-            anim: animTrack ? new AnimController(animTrack) : null
-        };
-
-        const getController = (cameraMode: CameraMode): CameraController => {
-            return controllers[cameraMode];
-        };
-
-        // set the global animation flag
-        state.hasAnimation = !!controllers.anim;
-        state.animationDuration = controllers.anim ? controllers.anim.animState.cursor.duration : 0;
-
-        // initialize camera mode (always orbit, no fly mode)
-        state.cameraMode = state.hasAnimation ? 'anim' : 'orbit';
+        const orbit = new OrbitController();
         this.camera.copy(resetCamera);
+        orbit.onEnter(this.camera);
 
-        const target = new Camera(this.camera);             // the active controller updates this
-        const from = new Camera(this.camera);               // stores the previous camera state during transition
-        let fromMode: CameraMode = 'orbit';
+        const target = new Camera(this.camera);
 
-        // enter the initial controller
-        getController(state.cameraMode).onEnter(this.camera);
-
-        // transition time between cameras
-        const transitionSpeed = 2.0;
-        let transitionTimer = 1;
-
-        // application update
         this.update = (deltaTime: number, frame: CameraFrame) => {
-
-            // use dt of 0 if animation is paused
-            const dt = state.cameraMode === 'anim' && state.animationPaused ? 0 : deltaTime;
-
-            // update transition timer
-            transitionTimer = Math.min(1, transitionTimer + deltaTime * transitionSpeed);
-
-            const controller = getController(state.cameraMode);
-
-            controller.update(dt, frame, target);
-
-            if (transitionTimer < 1) {
-                // lerp away from previous camera during transition
-                this.camera.lerp(from, target, easeOut(transitionTimer));
-            } else {
-                this.camera.copy(target);
-            }
-
-            // update animation timeline
-            if (state.cameraMode === 'anim') {
-                state.animationTime = controllers.anim.animState.cursor.value;
-            }
+            orbit.update(deltaTime, frame, target);
+            this.camera.copy(target);
         };
 
-        // handle input events
-        events.on('inputEvent', (eventName, event) => {
+        events.on('inputEvent', (eventName) => {
             switch (eventName) {
                 case 'frame':
-                    state.cameraMode = 'orbit';
-                    controllers.orbit.goto(frameCamera);
+                    orbit.goto(frameCamera);
                     break;
                 case 'reset':
-                    state.cameraMode = 'orbit';
-                    controllers.orbit.goto(resetCamera);
-                    break;
-                case 'playPause':
-                    if (state.hasAnimation) {
-                        if (state.cameraMode === 'anim') {
-                            state.animationPaused = !state.animationPaused;
-                        } else {
-                            state.cameraMode = 'anim';
-                            state.animationPaused = false;
-                        }
-                    }
+                    orbit.goto(this.savedResetCamera || resetCamera);
                     break;
                 case 'cancel':
                 case 'interrupt':
-                    if (state.cameraMode === 'anim') {
-                        state.cameraMode = fromMode;
-                    }
                     break;
             }
         });
 
-        // handle camera mode switching
-        events.on('cameraMode:changed', (value, prev) => {
-            // store previous camera mode and pose
-            target.copy(this.camera);
-            from.copy(this.camera);
-            fromMode = prev;
-
-            // exit the old controller
-            const prevController = getController(prev);
-            prevController.onExit(this.camera);
-
-            // enter new controller
-            const newController = getController(value);
-            newController.onEnter(this.camera);
-
-            // reset camera transition timer
-            transitionTimer = 0;
-        });
-
-        // handle user scrubbing the animation timeline
-        events.on('scrubAnim', (time) => {
-            // switch to animation camera if we're not already there
-            state.cameraMode = 'anim';
-
-            // set time
-            controllers.anim.animState.cursor.value = time;
-        });
-
-        // handle user picking in the scene
         events.on('pick', (position: Vec3) => {
-            // switch to orbit camera on pick
-            state.cameraMode = 'orbit';
-
-            // construct camera
             tmpCamera.copy(this.camera);
             tmpCamera.look(this.camera.position, position);
-
-            controllers.orbit.goto(tmpCamera);
+            orbit.goto(tmpCamera);
         });
 
         events.on('annotation.activate', (annotation: Annotation) => {
-            // switch to orbit camera on pick
-            state.cameraMode = 'orbit';
-
             const { initial } = annotation.camera;
-
-            // construct camera
             tmpCamera.fov = initial.fov;
             tmpCamera.look(
                 new Vec3(initial.position),
                 new Vec3(initial.target)
             );
+            orbit.goto(tmpCamera);
+        });
 
-            controllers.orbit.goto(tmpCamera);
+        events.on('saveResetView', () => {
+            this.savedResetCamera = new Camera(this.camera);
+            console.log('Saved current view as reset position');
+        });
+
+        events.on('restoreDefaultResetView', () => {
+            this.savedResetCamera = null;
+            console.log('Restored default reset view');
         });
     }
 }

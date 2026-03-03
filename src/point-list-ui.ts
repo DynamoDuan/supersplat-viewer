@@ -14,11 +14,9 @@ export class PointListUI {
         
         // Create UI structure
         this.container.innerHTML = `
-            <div style="padding: 1rem; background: #252525; border-left: 1px solid #404040; height: 100%; overflow-y: auto;">
-                <h2 style="font-size: 1.1rem; margin-bottom: 1rem; color: #fff;">
-                    Selected Points (<span id="pointCount">0</span>)
-                </h2>
-                <div id="annotationsList" style="max-height: calc(100vh - 150px); overflow-y: auto;"></div>
+            <div class="point-list-panel">
+                <h2 class="point-list-title">Selected Points (<span id="pointCount">0</span>)</h2>
+                <div id="annotationsList" class="point-list-items"></div>
             </div>
         `;
         
@@ -57,136 +55,95 @@ export class PointListUI {
         const style = document.createElement('style');
         style.id = styleId;
         style.textContent = `
+            .point-list-panel {
+                padding: 12px 16px;
+                background: rgba(15, 23, 42, 0.95);
+                border-left: 1px solid rgba(255,255,255,0.08);
+                height: 100%;
+                overflow-y: auto;
+            }
+            .point-list-title {
+                font-size: 13px;
+                font-weight: 600;
+                color: #e8e6e3;
+                margin-bottom: 12px;
+            }
+            .point-list-items {
+                max-height: calc(100vh - 120px);
+                overflow-y: auto;
+            }
             .annotation-item {
-                padding: 0.5rem;
-                background: #1a1a1a;
-                border-radius: 4px;
-                margin-bottom: 0.5rem;
-                font-size: 0.85rem;
+                padding: 8px 10px;
+                background: rgba(51, 65, 85, 0.5);
+                border-radius: 8px;
+                margin-bottom: 6px;
+                font-size: 12px;
                 display: flex;
                 align-items: center;
-                gap: 0.5rem;
+                gap: 8px;
                 cursor: default;
-                transition: background 0.2s, opacity 0.2s, transform 0.1s;
+                transition: all 0.15s;
                 position: relative;
             }
-            .annotation-item .drag-handle {
-                cursor: move;
-            }
             .annotation-item:hover {
-                background: #2a2a2a;
+                background: rgba(51, 65, 85, 0.8);
             }
             .annotation-item.dragging {
-                opacity: 0.8;
-                background: #2a2a2a;
-                transform: rotate(2deg);
-                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
+                opacity: 0.85;
+                transform: scale(1.02);
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
                 z-index: 1000;
             }
             .annotation-item.drag-over {
-                border-top: 2px solid #007acc;
-                margin-top: 2px;
-            }
-            .annotation-item.drag-over::before {
-                content: '';
-                position: absolute;
-                top: -2px;
-                left: 0;
-                right: 0;
-                height: 2px;
-                background: #007acc;
-                box-shadow: 0 0 4px #007acc;
+                border: 1px dashed #3b82f6;
             }
             .drag-handle {
                 cursor: grab;
-                color: #666;
-                font-size: 1rem;
+                color: #64748b;
+                font-size: 14px;
                 user-select: none;
-                padding: 0.25rem;
-                display: flex;
-                align-items: center;
+                padding: 2px;
             }
-            .drag-handle:active {
-                cursor: grabbing;
-            }
-            .annotation-item:hover .drag-handle {
-                color: #999;
-            }
-            .annotation-item-content {
-                flex: 1;
-                display: flex;
-                align-items: center;
-                gap: 0.5rem;
-            }
+            .drag-handle:active { cursor: grabbing; }
+            .annotation-item:hover .drag-handle { color: #94a3b8; }
+            .annotation-item-content { flex: 1; min-width: 0; }
             .color-indicator {
-                width: 16px;
-                height: 16px;
+                width: 12px;
+                height: 12px;
                 border-radius: 50%;
-                border: 2px solid #404040;
+                border: 1px solid rgba(255,255,255,0.2);
                 flex-shrink: 0;
             }
             .annotation-item .point-info {
-                color: #999;
+                color: #94a3b8;
+                font-family: ui-monospace, monospace;
+                font-size: 11px;
             }
-            .magnify-btn {
+            .magnify-btn, .delete-btn {
                 background: transparent;
                 border: none;
                 cursor: pointer;
-                font-size: 0.85rem;
-                padding: 0.2rem 0.35rem;
-                border-radius: 4px;
-                transition: all 0.2s;
-                opacity: 0.5;
+                padding: 4px 6px;
+                border-radius: 6px;
+                transition: all 0.15s;
+                opacity: 0.6;
                 user-select: none;
-                -webkit-user-select: none;
             }
-            .magnify-btn:hover {
-                opacity: 1;
-                background: rgba(255, 255, 255, 0.1);
-            }
+            .magnify-btn:hover, .delete-btn:hover { opacity: 1; }
+            .magnify-btn:hover { background: rgba(59, 130, 246, 0.2); }
             .magnify-btn.active {
                 opacity: 1;
-                background: rgba(0, 122, 204, 0.3);
-            }
-            .delete-btn {
-                background: transparent;
-                border: none;
-                color: #999;
-                cursor: pointer;
-                font-size: 1rem;
-                padding: 0.25rem 0.5rem;
-                border-radius: 4px;
-                transition: all 0.2s;
-                opacity: 0.6;
-                position: relative;
-                z-index: 10;
-                pointer-events: auto;
-                user-select: none;
-                -webkit-user-select: none;
+                background: rgba(59, 130, 246, 0.25);
             }
             .delete-btn:hover {
-                color: #f44336;
-                background: rgba(244, 67, 54, 0.1);
-                opacity: 1;
+                color: #ef4444;
+                background: rgba(239, 68, 68, 0.15);
             }
-            .delete-btn:active {
-                transform: scale(0.95);
-            }
-            .annotation-item:hover .delete-btn {
-                opacity: 1;
-            }
-            #annotationsList::-webkit-scrollbar {
-                width: 6px;
-            }
-            #annotationsList::-webkit-scrollbar-track {
-                background: #1a1a1a;
-            }
-            #annotationsList::-webkit-scrollbar-thumb {
-                background: #404040;
+            .point-list-items::-webkit-scrollbar { width: 6px; }
+            .point-list-items::-webkit-scrollbar-track { background: transparent; }
+            .point-list-items::-webkit-scrollbar-thumb {
+                background: rgba(100, 116, 139, 0.5);
                 border-radius: 3px;
-            }
-            #annotationsList::-webkit-scrollbar-thumb:hover {
-                background: #505050;
             }
         `;
         document.head.appendChild(style);
