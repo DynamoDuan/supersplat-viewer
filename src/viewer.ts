@@ -361,25 +361,53 @@ class Viewer {
 
         // Debounced filter computation - runs after camera stops moving
         const scheduleFilterComputation = () => {
+            console.log('scheduleFilterComputation called, depthFilterEnabled:', depthFilterEnabled);
             if (filterComputeTimeout) clearTimeout(filterComputeTimeout);
             filterComputeTimeout = setTimeout(async () => {
                 filterComputeTimeout = null;
-                if (!depthFilterEnabled) return;
+                console.log('scheduleFilterComputation timeout fired, depthFilterEnabled:', depthFilterEnabled);
+                if (!depthFilterEnabled) {
+                    console.log('scheduleFilterComputation: depth filter not enabled, returning');
+                    return;
+                }
 
-                // Get picker positions (picker is initialized in Promise.all below)
+                // Try to use centers-overlay's cached positions first
+                const positions = (this.centersOverlay as any).cachedPositions;
+                const opacities = (this.centersOverlay as any).cachedOpacities;
+
+                if (positions && positions.length > 0) {
+                    console.log('scheduleFilterComputation: using centersOverlay cached positions:', positions.length);
+                    this.centersOverlay.computeFiltering(positions, camera, opacities);
+                    updateFilterStats();
+                    app.renderNextFrame = true;
+                    return;
+                }
+
+                // Fallback: try to get from picker (for backward compatibility)
                 const pickerRef = (this as any)._picker;
-                if (!pickerRef) return;
+                if (!pickerRef) {
+                    console.log('scheduleFilterComputation: no picker ref and no cached positions');
+                    return;
+                }
 
                 // Wait for positions to be loaded
                 if (!pickerRef.positionCacheValid) {
+                    console.log('scheduleFilterComputation: waiting for position cache...');
                     await new Promise<void>(r => setTimeout(r, 500));
-                    if (!pickerRef.positionCacheValid) return;
+                    if (!pickerRef.positionCacheValid) {
+                        console.log('scheduleFilterComputation: position cache still not valid');
+                        return;
+                    }
                 }
 
-                const positions = pickerRef.cachedPositions;
-                if (!positions || positions.length === 0) return;
+                const pickerPositions = pickerRef.cachedPositions;
+                if (!pickerPositions || pickerPositions.length === 0) {
+                    console.log('scheduleFilterComputation: no positions available');
+                    return;
+                }
 
-                this.centersOverlay.computeFiltering(positions, camera, pickerRef.cachedOpacities);
+                console.log('scheduleFilterComputation: calling computeFiltering with', pickerPositions.length, 'positions from picker');
+                this.centersOverlay.computeFiltering(pickerPositions, camera, pickerRef.cachedOpacities);
                 updateFilterStats();
                 app.renderNextFrame = true;
             }, 300);

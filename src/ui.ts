@@ -33,21 +33,8 @@ const initJoystick = (
 
     // Update joystick visibility based on camera mode and input mode
     const updateJoystickVisibility = () => {
-        if (state.cameraMode === 'fly' && state.inputMode === 'touch') {
-            dom.joystickBase.classList.remove('hidden');
-            dom.joystickBase.classList.toggle('mode-2d', joystickMode === '2d');
-            dom.joystickBase.style.left = `${joystickFixedX}px`;
-            dom.joystickBase.style.top = `${joystickFixedY()}px`;
-            // Center the stick
-            dom.joystick.style.top = `${stickCenterY}px`;
-            if (joystickMode === '2d') {
-                dom.joystick.style.left = `${stickCenterX}px`;
-            } else {
-                dom.joystick.style.left = '8px'; // Reset to 1D centered position
-            }
-        } else {
-            dom.joystickBase.classList.add('hidden');
-        }
+        // Always hide joystick (no fly mode, matching Three.js OrbitControls)
+        dom.joystickBase.classList.add('hidden');
     };
 
     events.on('cameraMode:changed', updateJoystickVisibility);
@@ -448,7 +435,7 @@ const initUI = (global: Global) => {
     // Camera mode UI
     events.on('cameraMode:changed', () => {
         dom.orbitCamera.classList[state.cameraMode === 'orbit' ? 'add' : 'remove']('active');
-        dom.flyCamera.classList[state.cameraMode === 'fly' ? 'add' : 'remove']('active');
+        // dom.flyCamera.classList[state.cameraMode === 'fly' ? 'add' : 'remove']('active'); // Removed fly mode
     });
 
     dom.settings.addEventListener('click', () => {
@@ -574,9 +561,10 @@ const initUI = (global: Global) => {
         state.cameraMode = 'orbit';
     });
 
-    dom.flyCamera.addEventListener('click', () => {
-        state.cameraMode = 'fly';
-    });
+    // Fly camera button removed (only orbit mode, matching Three.js OrbitControls)
+    // dom.flyCamera.addEventListener('click', () => {
+    //     state.cameraMode = 'fly';
+    // });
 
     dom.reset.addEventListener('click', (event) => {
         events.fire('inputEvent', 'reset', event);
@@ -600,7 +588,7 @@ const initUI = (global: Global) => {
     tooltip.register(dom.play, 'Play', 'top');
     tooltip.register(dom.pause, 'Pause', 'top');
     tooltip.register(dom.orbitCamera, 'Orbit Camera', 'top');
-    tooltip.register(dom.flyCamera, 'Fly Camera', 'top');
+    // tooltip.register(dom.flyCamera, 'Fly Camera', 'top'); // Removed fly mode
     tooltip.register(dom.reset, 'Reset Camera', 'bottom');
     tooltip.register(dom.frame, 'Frame Scene', 'bottom');
     tooltip.register(dom.settings, 'Settings', 'top');

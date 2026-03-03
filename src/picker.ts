@@ -107,24 +107,57 @@ class Picker {
 
         // Load point positions from texture (cache for performance)
         const loadPositions = async () => {
+            console.log('Picker: loadPositions started');
             if (!this.gsplatEntity || this.positionCacheValid) {
+                console.log('Picker: loadPositions early return - gsplatEntity:', !!this.gsplatEntity, 'positionCacheValid:', this.positionCacheValid);
                 return;
             }
 
             const gsplat = this.gsplatEntity.gsplat as GSplatComponent;
             if (!gsplat || !gsplat.instance) {
+                console.log('Picker: loadPositions - no gsplat or instance');
+                this.positionCacheValid = true; // Mark as valid to prevent retry
                 return;
             }
 
             const resource = gsplat.instance.resource;
             const posTexture = (resource as any).transformATexture;
+
+            // Fallback: try to use centers from resource (for point cloud mode)
             if (!posTexture) {
+                console.log('Picker: loadPositions - no transformATexture, trying centers fallback');
+                const centers = (resource as any).centers;
+                if (centers) {
+                    const numSplats = centers.length / 3;
+                    console.log('Picker: using centers data, numSplats:', numSplats);
+                    this.cachedPositions = [];
+                    for (let i = 0; i < numSplats; i++) {
+                        this.cachedPositions.push(new Vec3(centers[i * 3], centers[i * 3 + 1], centers[i * 3 + 2]));
+                    }
+
+                    // Try to get opacities
+                    const splatData = (resource as any).splatData;
+                    if (splatData && splatData.opacities) {
+                        this.cachedOpacities = splatData.opacities;
+                        console.log('Picker: cached', this.cachedOpacities.length, 'opacities from splatData');
+                    } else {
+                        this.cachedOpacities = null;
+                        console.log('Picker: no opacities available');
+                    }
+
+                    this.positionCacheValid = true;
+                    console.log('Picker: loadPositions complete using centers fallback');
+                } else {
+                    console.log('Picker: no transformATexture and no centers, picker unavailable');
+                    this.positionCacheValid = true; // Mark as valid to prevent retry
+                }
                 return;
             }
 
             const texWidth = posTexture.width;
             const texHeight = posTexture.height;
             const numSplats = (resource as any).numSplats || texWidth * texHeight;
+            console.log('Picker: loadPositions - texWidth:', texWidth, 'texHeight:', texHeight, 'numSplats:', numSplats);
 
             // Read position texture data from GPU
             // Note: Reading from GPU texture is expensive, so we cache the result
@@ -137,8 +170,10 @@ class Picker {
                     depth: false
                 });
 
+                console.log('Picker: reading position texture...');
                 // Read pixels from texture (RGBA32UI format: 4 uint32 per pixel)
                 const pixels = await posTexture.read(0, 0, texWidth, texHeight, { renderTarget });
+                console.log('Picker: position texture read complete, pixels length:', pixels.length);
                 const positions: Vec3[] = [];
 
                 // Parse RGBA32UI format (4 uint32 values per pixel)
@@ -160,11 +195,13 @@ class Picker {
                 renderTarget.destroy();
 
                 this.cachedPositions = positions;
+                console.log('Picker: cached', positions.length, 'positions');
 
                 // Read opacity from colorTexture (RGBA16F: alpha channel = opacity)
                 const colorTexture = (resource as any).colorTexture;
                 if (colorTexture) {
                     try {
+                        console.log('Picker: reading color texture for opacity...');
                         const colorRT = new RenderTarget({
                             colorBuffer: colorTexture,
                             depth: false
@@ -178,6 +215,7 @@ class Picker {
                         }
                         colorRT.destroy();
                         this.cachedOpacities = opacities;
+                        console.log('Picker: cached', opacities.length, 'opacities');
                     } catch (e) {
                         console.warn('Failed to read color texture for opacity:', e);
                         this.cachedOpacities = null;
@@ -185,6 +223,7 @@ class Picker {
                 }
 
                 this.positionCacheValid = true;
+                console.log('Picker: loadPositions complete, positionCacheValid set to true');
             } catch (error) {
                 console.warn('Failed to read position texture (ray-based picking may be unavailable):', error);
                 // Fallback: return null to indicate picking is not available

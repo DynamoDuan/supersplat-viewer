@@ -16,10 +16,8 @@ import type { Global } from './types';
 const tmpV1 = new Vec3();
 const tmpV2 = new Vec3();
 const mouseRotate = new Vec3();
-const flyMove = new Vec3();
 const pinchMove = new Vec3();
 const orbitRotate = new Vec3();
-const flyRotate = new Vec3();
 const stickMove = new Vec3();
 const stickRotate = new Vec3();
 
@@ -239,11 +237,11 @@ class InputController {
         const { state } = this.global;
         const { camera } = this.global.camera;
 
-        // update state
+        // update state (add keyboard arrow keys for panning)
         this._state.axis.add(tmpV1.set(
-            (key[keyCode.D] - key[keyCode.A]) + (key[keyCode.RIGHT] - key[keyCode.LEFT]),
-            (key[keyCode.E] - key[keyCode.Q]),
-            (key[keyCode.W] - key[keyCode.S]) + (key[keyCode.UP] - key[keyCode.DOWN])
+            (key[keyCode.RIGHT] - key[keyCode.LEFT]),
+            (key[keyCode.DOWN] - key[keyCode.UP]), // Flip: UP = positive, DOWN = negative
+            0
         ));
         this._state.touches += count[0];
         for (let i = 0; i < button.length; i++) {
@@ -252,56 +250,57 @@ class InputController {
         this._state.shift += key[keyCode.SHIFT];
         this._state.ctrl += key[keyCode.CTRL];
 
-        if (state.cameraMode !== 'fly' && this._state.axis.length() > 0) {
-            state.cameraMode = 'fly';
-        }
-
-        const orbit = +(state.cameraMode === 'orbit');
-        const fly = +(state.cameraMode === 'fly');
+        // Always use orbit mode (no fly mode, matching Three.js OrbitControls)
+        const orbit = 1;
         const double = +(this._state.touches > 1);
-        const pan = this._state.mouse[2] || +(button[2] === -1) || double;
 
-        const orbitFactor = fly ? camera.fov / 120 : 1;
+        // Match Three.js OrbitControls behavior:
+        // - Left button (button[0]) = rotate
+        // - Right button (button[2]) or Middle button (button[1]) = pan
+        const isLeftButton = this._state.mouse[0] > 0 || button[0] > 0;
+        const isRightButton = this._state.mouse[2] > 0 || button[2] > 0;
+        const isMiddleButton = this._state.mouse[1] > 0 || button[1] > 0;
+        const pan = +(isRightButton || isMiddleButton || double);
+        const rotate = +(isLeftButton && !pan);
 
         const { deltas } = this.frame;
 
-        // desktop move
+        // desktop move (pan with right/middle button, zoom with wheel, pan with arrow keys)
         const v = tmpV1.set(0, 0, 0);
-        const keyMove = this._state.axis.clone().normalize();
-        v.add(keyMove.mulScalar(fly * this.moveSpeed * (this._state.shift ? 4 : this._state.ctrl ? 0.25 : 1) * dt));
+
+        // Arrow keys for panning (matching Three.js OrbitControls keys behavior)
+        const keyPan = this._state.axis.clone();
+        const keyPanWorld = screenToWorld(camera, keyPan.x * 50, keyPan.y * 50, distance);
+        v.add(keyPanWorld.mulScalar(dt * 10)); // Scale for smooth panning
+
+        // Mouse pan (right/middle button)
         const panMove = screenToWorld(camera, mouse[0], mouse[1], distance);
         v.add(panMove.mulScalar(pan));
+
+        // Wheel zoom
         const wheelMove = new Vec3(0, 0, -wheel[0]);
         v.add(wheelMove.mulScalar(this.wheelSpeed * dt));
-        // FIXME: need to flip z axis for orbit camera
-        deltas.move.append([v.x, v.y, orbit ? -v.z : v.z]);
 
-        // desktop rotate
+        deltas.move.append([v.x, v.y, -v.z]); // flip z for orbit camera
+
+        // desktop rotate (left button only)
         v.set(0, 0, 0);
         mouseRotate.set(mouse[0], mouse[1], 0);
-        v.add(mouseRotate.mulScalar((1 - pan) * this.orbitSpeed * orbitFactor * dt));
+        v.add(mouseRotate.mulScalar(rotate * this.orbitSpeed * dt));
         deltas.rotate.append([v.x, v.y, v.z]);
 
-        // mobile move
+        // mobile move (pan and pinch zoom)
         v.set(0, 0, 0);
         const orbitMove = screenToWorld(camera, touch[0], touch[1], distance);
-        v.add(orbitMove.mulScalar(orbit * pan));
-        // Use touch joystick values for fly movement (X = strafe, Y = forward/backward)
-        flyMove.set(this._touchJoystickX, 0, -this._touchJoystickY);
-        v.add(flyMove.mulScalar(fly * this.moveSpeed * dt));
+        v.add(orbitMove.mulScalar(pan));
         pinchMove.set(0, 0, pinch[0]);
-        v.add(pinchMove.mulScalar(orbit * double * this.pinchSpeed * dt));
+        v.add(pinchMove.mulScalar(double * this.pinchSpeed * dt));
         deltas.move.append([v.x, v.y, v.z]);
 
-        // mobile rotate
+        // mobile rotate (single touch)
         v.set(0, 0, 0);
         orbitRotate.set(touch[0], touch[1], 0);
-        v.add(orbitRotate.mulScalar(orbit * (1 - pan) * this.orbitSpeed * dt));
-        // In fly mode, use any touch for look-around (joystick captures its own touches)
-        // Exclude multi-touch (double) to avoid interference with pinch gestures
-        // 1.25x sensitivity for touch look-around
-        flyRotate.set(touch[0], touch[1], 0);
-        v.add(flyRotate.mulScalar(fly * (1 - double) * this.orbitSpeed * orbitFactor * 1.25 * dt));
+        v.add(orbitRotate.mulScalar((1 - pan) * this.orbitSpeed * dt));
         deltas.rotate.append([v.x, v.y, v.z]);
 
         // gamepad move
@@ -313,7 +312,7 @@ class InputController {
         // gamepad rotate
         v.set(0, 0, 0);
         stickRotate.set(rightStick[0], rightStick[1], 0);
-        v.add(stickRotate.mulScalar(this.orbitSpeed * orbitFactor * dt));
+        v.add(stickRotate.mulScalar(this.orbitSpeed * dt));
         deltas.rotate.append([v.x, v.y, v.z]);
     }
 }

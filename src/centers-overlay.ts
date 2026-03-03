@@ -49,6 +49,8 @@ class CentersOverlay {
     private filteredPointColor = new Color(1.0, 0.0, 0.0, 1.0);  // Red for filtered points
     private totalPoints = 0;  // Total number of points
     private filteredPointsCount = 0;  // Number of filtered points
+    private cachedPositions: Vec3[] | null = null;  // Cached positions for filtering
+    private cachedOpacities: Float32Array | null = null;  // Cached opacities for filtering
     private filterStateTexture: Texture | null = null;  // GPU texture holding per-splat filter state
     private depthTexture: Texture | null = null;  // GPU texture holding per-splat depth values for visualization
     private splatTexWidth = 1;
@@ -116,6 +118,23 @@ class CentersOverlay {
         }
 
         this.setTotalPoints(numSplats);
+
+        // Cache positions as Vec3 array for filtering
+        this.cachedPositions = [];
+        for (let i = 0; i < numSplats; i++) {
+            this.cachedPositions.push(new Vec3(centers[i * 3], centers[i * 3 + 1], centers[i * 3 + 2]));
+        }
+        console.log('CentersOverlay: cached', this.cachedPositions.length, 'positions');
+
+        // Try to get opacities from resource
+        const splatData = (resource as any).splatData;
+        if (splatData && splatData.opacities) {
+            this.cachedOpacities = splatData.opacities;
+            console.log('CentersOverlay: cached', this.cachedOpacities.length, 'opacities');
+        } else {
+            console.log('CentersOverlay: no opacities available in resource');
+            this.cachedOpacities = null;
+        }
 
         // Compute texture dimensions for per-splat data (still needed for filter state)
         this.splatTexWidth = Math.max(1, Math.ceil(Math.sqrt(numSplats)));
@@ -353,6 +372,7 @@ class CentersOverlay {
      */
     setShowFilteredPoints(show: boolean) {
         this.showFilteredPoints = show;
+        this.updateVertexColorsFromFilterState();
     }
 
     /**
@@ -839,10 +859,12 @@ class CentersOverlay {
      * Get statistics about filtering
      */
     getFilterStats() {
+        const erasedCount = this.getErasedCount();
         return {
             total: this.totalPoints,
             filtered: this.filteredPointsCount,
-            visible: this.totalPoints - this.filteredPointsCount
+            erased: erasedCount,
+            visible: this.totalPoints - this.filteredPointsCount - erasedCount
         };
     }
 
@@ -880,12 +902,18 @@ class CentersOverlay {
      *   4. Compare each splat's depth against the blended surface depth
      */
     computeFiltering(positions: Vec3[], cameraEntity: Entity, opacities?: Float32Array | null) {
+        console.log('computeFiltering called, positions:', positions?.length, 'threshold:', this.depthThreshold);
+
         if (!this.filterStateTexture || !this.gsplatEntity || !positions || positions.length === 0) {
+            console.log('computeFiltering early return');
             return;
         }
 
         const cam = cameraEntity.camera;
-        if (!cam) return;
+        if (!cam) {
+            console.log('computeFiltering: no camera');
+            return;
+        }
 
         const near = cam.nearClip;
         const far = cam.farClip;
@@ -1000,23 +1028,28 @@ class CentersOverlay {
             }
 
             const idx = i * 4;
-            pixels[idx] = isFiltered ? 255 : 0;
-            // pixels[idx + 1] preserved (G channel = eraser state)
-            pixels[idx + 2] = 0;
-            pixels[idx + 3] = 255;
+            pixels[idx] = isFiltered ? 255 : 0;  // R channel = filter state
+            // pixels[idx + 1] preserved (G channel = eraser state) - don't modify
+            pixels[idx + 2] = 0;  // B channel = preview
+            pixels[idx + 3] = 255;  // A channel
         }
 
         // Clear remaining pixels (preserve G channel)
         for (let i = numSplats; i < this.splatTexWidth * this.splatTexHeight; i++) {
             const idx = i * 4;
-            pixels[idx] = 0;
-            // pixels[idx + 1] preserved (G channel = eraser state)
-            pixels[idx + 2] = 0;
-            pixels[idx + 3] = 255;
+            pixels[idx] = 0;  // R channel = not filtered
+            // pixels[idx + 1] preserved (G channel = eraser state) - don't modify
+            pixels[idx + 2] = 0;  // B channel = preview
+            pixels[idx + 3] = 255;  // A channel
         }
 
         this.filterStateTexture.unlock();
         this.filteredPointsCount = filteredCount;
+
+        console.log('computeFiltering done: filtered', filteredCount, 'out of', numSplats, 'points');
+
+        // --- Update vertex colors based on filter state ---
+        this.updateVertexColorsFromFilterState();
 
         // --- Also update depth visualization texture ---
         if (this.depthTexture) {
@@ -1073,6 +1106,112 @@ class CentersOverlay {
         }
         this.filterStateTexture.unlock();
         this.filteredPointsCount = 0;
+        this.updateVertexColorsFromFilterState();
+    }
+
+    /**
+     * Update vertex colors based on filter state texture
+     */
+    private updateVertexColorsFromFilterState() {
+        if (!this.mesh || !this.filterStateTexture) {
+            console.log('updateVertexColorsFromFilterState: early return - mesh or texture missing');
+            return;
+        }
+
+        const vertexBuffer = this.mesh.vertexBuffer;
+        if (!vertexBuffer) {
+            console.log('updateVertexColorsFromFilterState: no vertex buffer');
+            return;
+        }
+
+        const numSplats = this.totalPoints;
+        const vertexFormat = vertexBuffer.format;
+        const stride = vertexFormat.size;
+        const colorOffset = 12; // 3 floats * 4 bytes = 12 bytes
+
+        // Read filter state
+        const filterPixels = this.filterStateTexture.lock();
+
+        // Lock vertex buffer and update colors
+        const vertexData = new ArrayBuffer(stride * numSplats);
+        const colorView = new Uint8Array(vertexData);
+
+        // Read existing vertex data
+        const existingData = vertexBuffer.lock();
+        colorView.set(new Uint8Array(existingData));
+        vertexBuffer.unlock();
+
+        let filteredVisibleCount = 0;
+        let filteredHiddenCount = 0;
+        let erasedCount = 0;
+        let normalCount = 0;
+        let highlightCount = 0;
+
+        // Create a set for fast lookup of cursor highlight IDs
+        const highlightSet = new Set(this.cursorHighlightIds);
+
+        // Update colors based on filter state
+        for (let i = 0; i < numSplats; i++) {
+            const filterIdx = i * 4;
+            const isFiltered = filterPixels[filterIdx] > 0; // R channel = filter state
+            const isErased = filterPixels[filterIdx + 1] > 0; // G channel = erased state
+            const isCursorHighlight = this.cursorHighlightEnabled && highlightSet.has(i);
+
+            const vertexOffset = i * stride;
+            const colorIdx = vertexOffset + colorOffset;
+
+            if (isErased) {
+                // Erased points are invisible (alpha = 0)
+                colorView[colorIdx] = 0;
+                colorView[colorIdx + 1] = 0;
+                colorView[colorIdx + 2] = 0;
+                colorView[colorIdx + 3] = 0;
+                erasedCount++;
+            } else if (isCursorHighlight) {
+                // Cursor highlight points shown in green (highest priority)
+                colorView[colorIdx] = Math.floor(this.cursorHighlightColor.r * 255);
+                colorView[colorIdx + 1] = Math.floor(this.cursorHighlightColor.g * 255);
+                colorView[colorIdx + 2] = Math.floor(this.cursorHighlightColor.b * 255);
+                colorView[colorIdx + 3] = Math.floor(this.cursorHighlightColor.a * 255);
+                highlightCount++;
+            } else if (isFiltered && this.showFilteredPoints) {
+                // Filtered points shown in red
+                colorView[colorIdx] = Math.floor(this.filteredPointColor.r * 255);
+                colorView[colorIdx + 1] = Math.floor(this.filteredPointColor.g * 255);
+                colorView[colorIdx + 2] = Math.floor(this.filteredPointColor.b * 255);
+                colorView[colorIdx + 3] = Math.floor(this.filteredPointColor.a * 255);
+                filteredVisibleCount++;
+            } else if (isFiltered && !this.showFilteredPoints) {
+                // Filtered points are hidden (alpha = 0)
+                colorView[colorIdx] = 0;
+                colorView[colorIdx + 1] = 0;
+                colorView[colorIdx + 2] = 0;
+                colorView[colorIdx + 3] = 0;
+                filteredHiddenCount++;
+            } else {
+                // Visible points use selected color
+                colorView[colorIdx] = Math.floor(this.selectedColor.r * 255);
+                colorView[colorIdx + 1] = Math.floor(this.selectedColor.g * 255);
+                colorView[colorIdx + 2] = Math.floor(this.selectedColor.b * 255);
+                colorView[colorIdx + 3] = Math.floor(this.selectedColor.a * 255);
+                normalCount++;
+            }
+        }
+
+        this.filterStateTexture.unlock();
+
+        console.log('updateVertexColorsFromFilterState:', {
+            total: numSplats,
+            normal: normalCount,
+            highlighted: highlightCount,
+            filteredVisible: filteredVisibleCount,
+            filteredHidden: filteredHiddenCount,
+            erased: erasedCount,
+            showFilteredPoints: this.showFilteredPoints
+        });
+
+        // Update vertex buffer with new colors
+        vertexBuffer.setData(vertexData);
     }
 
     /**
@@ -1121,6 +1260,7 @@ class CentersOverlay {
                 }
             }
             this.filterStateTexture.unlock();
+            this.updateVertexColorsFromFilterState();
         }
     }
 
@@ -1176,6 +1316,7 @@ class CentersOverlay {
                 pixels[i + 1] = 0; // clear G channel
             }
             this.filterStateTexture.unlock();
+            this.updateVertexColorsFromFilterState();
         }
     }
 
@@ -1192,6 +1333,7 @@ class CentersOverlay {
             pixels[idx + 1] = keepIndices.has(i) ? 0 : 255;
         }
         this.filterStateTexture.unlock();
+        this.updateVertexColorsFromFilterState();
     }
 
     /**
@@ -1200,6 +1342,7 @@ class CentersOverlay {
     setCursorHighlightIds(ids: number[]) {
         this.cursorHighlightIds = ids.slice(0, 5);
         this.cursorHighlightEnabled = ids.length > 0;
+        this.updateVertexColorsFromFilterState();
     }
 
     /**

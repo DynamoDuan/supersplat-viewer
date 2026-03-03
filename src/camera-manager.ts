@@ -6,7 +6,6 @@ import {
 import { createRotateTrack } from './animation/create-rotate-track';
 import { AnimController } from './cameras/anim-controller';
 import { Camera, type CameraFrame, type CameraController } from './cameras/camera';
-import { FlyController } from './cameras/fly-controller';
 import { OrbitController } from './cameras/orbit-controller';
 import { easeOut } from './core/math';
 import { Annotation } from './settings';
@@ -62,11 +61,10 @@ class CameraManager {
 
         const controllers = {
             orbit: new OrbitController(),
-            fly: new FlyController(),
             anim: animTrack ? new AnimController(animTrack) : null
         };
 
-        const getController = (cameraMode: 'orbit' | 'anim' | 'fly'): CameraController => {
+        const getController = (cameraMode: CameraMode): CameraController => {
             return controllers[cameraMode];
         };
 
@@ -74,13 +72,13 @@ class CameraManager {
         state.hasAnimation = !!controllers.anim;
         state.animationDuration = controllers.anim ? controllers.anim.animState.cursor.duration : 0;
 
-        // initialize camera mode and initial camera position
-        state.cameraMode = state.hasAnimation ? 'anim' : (isObjectExperience ? 'orbit' : 'fly');
+        // initialize camera mode (always orbit, no fly mode)
+        state.cameraMode = state.hasAnimation ? 'anim' : 'orbit';
         this.camera.copy(resetCamera);
 
         const target = new Camera(this.camera);             // the active controller updates this
         const from = new Camera(this.camera);               // stores the previous camera state during transition
-        let fromMode: CameraMode = isObjectExperience ? 'orbit' : 'fly';
+        let fromMode: CameraMode = 'orbit';
 
         // enter the initial controller
         getController(state.cameraMode).onEnter(this.camera);
