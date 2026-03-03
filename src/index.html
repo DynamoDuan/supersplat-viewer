@@ -18,7 +18,7 @@
             const posterUrl = url.searchParams.get('poster');
             const skyboxUrl = url.searchParams.get('skybox');
             const settingsUrl = url.searchParams.has('settings') ? url.searchParams.get('settings') : './settings.json';
-            const contentUrl = url.searchParams.has('content') ? url.searchParams.get('content') : './scene.compressed.ply';
+            const contentUrl = url.searchParams.has('content') ? url.searchParams.get('content') : './point_cloud_real2sim.ply';
 
             const sseConfig = {
                 poster: posterUrl && createImage(posterUrl),

@@ -44,16 +44,15 @@ void main(void) {
 		return;
 	}
 	#ifdef GSPLAT_ERASER
-		if (texelFetch(eraserState, source.uv, 0).g > 0.5) {
+		if (texelFetch(eraserState, splat.uv, 0).g > 0.5) {
 			gl_Position = discardVec;
 			return;
 		}
 	#endif
-	vec3 modelCenter = readCenter(source);
+	vec3 modelCenter = getCenter();
 	SplatCenter center;
 	center.modelCenterOriginal = modelCenter;
 
-	modifyCenter(modelCenter);
 	modifySplatCenter(modelCenter);
 	center.modelCenterModified = modelCenter;
 	if (!initCenter(modelCenter, center)) {
@@ -65,7 +64,7 @@ void main(void) {
 		gl_Position = discardVec;
 		return;
 	}
-	vec4 clr = readColor(source);
+	vec4 clr = getColor();
 	#if GSPLAT_AA
 		clr.a *= corner.aaFactor;
 	#endif
@@ -73,13 +72,12 @@ void main(void) {
 		vec3 dir = normalize(center.view * mat3(center.modelView));
 		vec3 sh[SH_COEFFS];
 		float scale;
-		readSHData(source, sh, scale);
+		readSHData(sh, scale);
 		clr.xyz += evalSH(sh, dir) * scale;
 	#endif
-	modifyColor(modelCenter, clr);
 	modifySplatColor(modelCenter, clr);
 	clipCorner(corner, clr.w);
-	gl_Position = center.proj + vec4(corner.offset, 0, 0);
+	gl_Position = center.proj + vec4(corner.offset.xyz, 0);
 	gaussianUV = corner.uv;
 	#ifdef GSPLAT_DEPTH_VIZ
 		float depth = -center.view.z;
@@ -94,7 +92,7 @@ void main(void) {
 		gaussianColor = vec4(prepareOutputFromGamma(max(clr.xyz, 0.0)), clr.w);
 	#endif
 	#ifndef DITHER_NONE
-		id = float(source.id);
+		id = float(splat.index);
 	#endif
 	#ifdef PREPASS_PASS
 		vLinearDepth = -center.view.z;
@@ -149,17 +147,16 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
 		return output;
 	}
 	#ifdef GSPLAT_ERASER
-		let eraserUV = vec2f(f32(source.uv.x) + 0.5, f32(source.uv.y) + 0.5) / vec2f(textureDimensions(eraserState, 0));
+		let eraserUV = vec2f(f32(splat.uv.x) + 0.5, f32(splat.uv.y) + 0.5) / vec2f(textureDimensions(eraserState, 0));
 		if (textureSampleLevel(eraserState, eraserStateSampler, eraserUV, 0.0).g > 0.5) {
 			output.position = discardVec;
 			return output;
 		}
 	#endif
-	var modelCenter: vec3f = readCenter(&source);
+	var modelCenter: vec3f = getCenter();
 	var center: SplatCenter;
 	center.modelCenterOriginal = modelCenter;
 
-	modifyCenter(&modelCenter);
 	modifySplatCenter(&modelCenter);
 	center.modelCenterModified = modelCenter;
 	if (!initCenter(modelCenter, &center)) {
@@ -171,7 +168,7 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
 		output.position = discardVec;
 		return output;
 	}
-	var clr: vec4f = readColor(&source);
+	var clr: vec4f = getColor();
 	#if GSPLAT_AA
 		clr.a = clr.a * corner.aaFactor;
 	#endif
@@ -180,20 +177,19 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
 		let dir = normalize(center.view * modelView3x3);
 		var sh: array<vec3f, SH_COEFFS>;
 		var scale: f32;
-		readSHData(&source, &sh, &scale);
+		readSHData(&sh, &scale);
 		clr = vec4f(clr.xyz + evalSH(&sh, dir) * scale, clr.a);
 	#endif
-	modifyColor(modelCenter, &clr);
 	modifySplatColor(modelCenter, &clr);
 	clipCorner(&corner, clr.w);
-	output.position = center.proj + vec4f(corner.offset, 0.0, 0.0);
+	output.position = center.proj + vec4f(corner.offset.x, corner.offset.y, corner.offset.z, 0.0);
 	output.gaussianUV = corner.uv;
 	#ifdef GSPLAT_DEPTH_VIZ
 		let depth: f32 = -center.view.z;
 		let nd: f32 = 1.0 - clamp((depth - uniform.camera_params.z) / (uniform.camera_params.y - uniform.camera_params.z), 0.0, 1.0);
 		output.gaussianColor = vec4f(turboColormap(nd), clr.w);
 	#elif defined(GSPLAT_OVERDRAW)
-		let t: f32 = clamp(originalCenter.y / 20.0, 0.0, 1.0);
+		let t: f32 = clamp(modelCenter.y / 20.0, 0.0, 1.0);
 		let rampColor: vec3f = textureSampleLevel(colorRamp, colorRampSampler, vec2f(t, 0.5), 0.0).rgb;
 		clr.a = clr.a * (1.0 / 32.0) * uniform.colorRampIntensity;
 		output.gaussianColor = vec4f(rampColor, clr.a);
@@ -201,7 +197,7 @@ fn vertexMain(input: VertexInput) -> VertexOutput {
 		output.gaussianColor = vec4f(prepareOutputFromGamma(max(clr.xyz, vec3f(0.0))), clr.w);
 	#endif
 	#ifndef DITHER_NONE
-		output.id = f32(source.id);
+		output.id = f32(splat.index);
 	#endif
 	#ifdef PREPASS_PASS
 		output.vLinearDepth = -center.view.z;
