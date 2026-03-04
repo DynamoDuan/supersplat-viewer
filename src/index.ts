@@ -137,8 +137,6 @@ const main = (app: AppBase, camera: Entity, settingsJson: any, config: Config) =
         isFullscreen: false,
         controlsHidden: false,
         showCenters: false,
-        centersPointSize: 5,
-        showCameraGizmo: true
     });
 
     const global: Global = {

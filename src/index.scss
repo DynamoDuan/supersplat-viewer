@@ -25,6 +25,7 @@ $clr-bkg-panel: rgba(15, 23, 42, 0.95);
 body {
     overflow: hidden;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 16px;
     user-select: none;
     -webkit-user-select: none;
     -webkit-touch-callout: none;
@@ -86,7 +87,7 @@ button {
     backdrop-filter: blur(12px);
 
     #loadingText {
-        font-size: 15px;
+        font-size: 17px;
         color: $clr-text-light;
         text-align: center;
     }
@@ -125,20 +126,20 @@ button {
 
     #buttonsContainer {
         display: flex;
-        gap: 4px;
+        gap: 6px;
         align-items: center;
-        padding: 6px 10px;
+        padding: 10px 14px;
         background: $clr-bkg-panel;
-        border-radius: 10px;
+        border-radius: 12px;
         border: 1px solid rgba(255, 255, 255, 0.06);
         backdrop-filter: blur(12px);
 
         .controlButton {
-            width: 36px;
-            height: 36px;
+            width: 44px;
+            height: 44px;
             padding: 0;
             border: 0;
-            border-radius: 8px;
+            border-radius: 10px;
             cursor: pointer;
             color: $clr-text-muted;
             background: transparent;
@@ -181,19 +182,19 @@ button {
 #settingsPanel {
     position: fixed;
     right: max(12px, env(safe-area-inset-right));
-    bottom: calc(max(12px, env(safe-area-inset-bottom)) + 60px);
-    width: 260px;
-    padding: 12px;
-    border-radius: 12px;
+    top: max(12px, env(safe-area-inset-top));
+    width: 240px;
+    padding: 8px;
+    border-radius: 10px;
     z-index: 1001;
     background: $clr-bkg-panel;
     border: 1px solid rgba(255, 255, 255, 0.08);
     backdrop-filter: blur(16px);
-    font-size: 13px;
+    font-size: 14px;
     color: $clr-text;
 
     .settingsSection {
-        margin-bottom: 12px;
+        margin-bottom: 6px;
 
         &:last-child {
             margin-bottom: 0;
@@ -201,17 +202,13 @@ button {
     }
 
     .settingsSectionTitle {
-        font-size: 10px;
+        font-size: 11px;
         font-weight: 600;
         text-transform: uppercase;
         letter-spacing: 0.05em;
         color: $clr-text-muted;
-        margin-bottom: 8px;
-        padding-left: 4px;
-    }
-
-    .settingsToggleRow {
-        cursor: pointer;
+        margin-bottom: 4px;
+        padding-left: 2px;
     }
 
     .settingsSubSection {
@@ -224,8 +221,8 @@ button {
     .settingsRow {
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 6px 8px;
+        gap: 8px;
+        padding: 4px 6px;
         border-radius: 6px;
         cursor: pointer;
         transition: background 0.15s;
@@ -235,8 +232,8 @@ button {
         }
 
         .checkMark {
-            width: 18px;
-            font-size: 12px;
+            width: 20px;
+            font-size: 14px;
             color: transparent;
 
             &.active {
@@ -250,18 +247,36 @@ button {
             color: $clr-text-muted;
         }
 
+        select {
+            flex: 1;
+            min-width: 100px;
+            padding: 4px 8px;
+            font-size: 13px;
+            color: $clr-text;
+            background: $clr-bkg-dark;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 6px;
+            cursor: pointer;
+            -webkit-appearance: none;
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394a3b8' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 8px center;
+            padding-right: 28px;
+        }
+
         input[type="range"] {
             flex: 2;
-            min-width: 80px;
-            height: 6px;
+            min-width: 70px;
+            height: 5px;
             -webkit-appearance: none;
             background: $clr-bkg-dark;
             border-radius: 3px;
 
             &::-webkit-slider-thumb {
                 -webkit-appearance: none;
-                width: 14px;
-                height: 14px;
+                width: 12px;
+                height: 12px;
                 border-radius: 50%;
                 background: $clr-accent;
                 cursor: pointer;
@@ -269,7 +284,7 @@ button {
         }
 
         span:last-child {
-            min-width: 48px;
+            min-width: 44px;
             text-align: right;
             font-size: 12px;
             color: $clr-text-muted;
@@ -278,7 +293,7 @@ button {
         &#filterStatsRow {
             flex-wrap: wrap;
             gap: 12px;
-            font-size: 11px;
+            font-size: 13px;
             color: $clr-text-muted;
 
             strong {
@@ -296,15 +311,46 @@ button {
         }
     }
 
+    .boxedSection {
+        background: rgba(0, 0, 0, 0.25);
+        border-radius: 6px;
+        padding: 6px 8px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .boxedSection .settingsBtn {
+        display: block;
+        width: 100%;
+        margin-top: 4px;
+        padding: 5px 8px;
+        font-size: 13px;
+
+        &:first-of-type {
+            margin-top: 0;
+        }
+    }
+
+    .boxedSection .settingsRow {
+        margin-top: 4px;
+    }
+
+    .toggleBtn {
+        &.active {
+            background: rgba(59, 130, 246, 0.2);
+            border-color: rgba(59, 130, 246, 0.4);
+            color: #93c5fd;
+        }
+    }
+
     .settingsBtn {
         width: 100%;
-        padding: 8px 12px;
-        margin-top: 4px;
+        padding: 5px 8px;
+        margin-top: 2px;
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 6px;
         background: $clr-bkg-dark;
         color: $clr-text;
-        font-size: 12px;
+        font-size: 14px;
         cursor: pointer;
         transition: all 0.15s;
 
@@ -353,7 +399,7 @@ button {
                 padding: 8px 12px;
                 border-radius: 8px;
                 text-align: center;
-                font-size: 13px;
+                font-size: 15px;
                 font-weight: 500;
                 color: $clr-text-muted;
                 cursor: pointer;
@@ -372,7 +418,7 @@ button {
 
         #infoPanels {
             h1 {
-                font-size: 11px;
+                font-size: 13px;
                 font-weight: 600;
                 text-transform: uppercase;
                 letter-spacing: 0.05em;
@@ -389,7 +435,7 @@ button {
                 display: flex;
                 justify-content: space-between;
                 padding: 4px 0;
-                font-size: 13px;
+                font-size: 15px;
 
                 .control-action {
                     color: $clr-text;
@@ -442,8 +488,8 @@ button {
 #tooltip {
     display: none;
     position: absolute;
-    padding: 6px 10px;
-    font-size: 12px;
+    padding: 8px 12px;
+    font-size: 14px;
     border-radius: 6px;
     color: $clr-text-light;
     background: $clr-bkg-dark;

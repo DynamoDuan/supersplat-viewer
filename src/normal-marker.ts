@@ -25,7 +25,7 @@ export class NormalMarker {
     points: NormalAnnotation[] = [];
     private pointSpheres: { entity: Entity; meshInstance: MeshInstance }[] = [];
     private arrowEntity: Entity | null = null;
-    private currentSphereSize = 0.01;
+    private currentSphereSize = 0.06;  // 2x larger than point-marker for better visibility
     private computedNormal: Vec3 | null = null;
     private computedCentroid: Vec3 | null = null;
     private visible = true;
@@ -40,21 +40,22 @@ export class NormalMarker {
         this.gsplatEntity = gsplatEntity;
     }
 
+    private nextDisplayIndex = -1;
+
     addPoint(index: number, position: Vec3): boolean {
-        // Check if already added
-        if (this.points.find(p => p.index === index)) {
-            return false;
-        }
+        if (this.points.find(p => p.index === index)) return false;
 
-        this.points.push({
-            index,
-            position: position.clone()
-        });
-
+        this.points.push({ index, position: position.clone() });
         this.createSphere(this.points.length - 1);
         this.app.renderNextFrame = true;
         this.onPointsChanged?.();
         return true;
+    }
+
+    /** Add point at exact position (for JSON load without cloud match). Uses unique negative index. */
+    addPointAtPosition(position: Vec3): boolean {
+        const idx = this.nextDisplayIndex--;
+        return this.addPoint(idx, position);
     }
 
     deletePointByIndex(idx: number): void {
@@ -85,11 +86,11 @@ export class NormalMarker {
         this.onPointsChanged?.();
     }
 
-    setComputedNormal(normal: Vec3, centroid: Vec3): void {
+    setComputedNormal(normal: Vec3, centroid: Vec3, skipArrow = false): void {
         this.computedNormal = normal.clone();
         this.computedCentroid = centroid.clone();
         this.clearArrow();
-        this.createArrow(centroid, normal);
+        if (!skipArrow) this.createArrow(centroid, normal);
         this.app.renderNextFrame = true;
     }
 

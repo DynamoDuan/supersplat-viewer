@@ -1,28 +1,57 @@
 import {
     type BoundingBox,
-    Mat4,
-    Quat,
     Vec3
 } from 'playcanvas';
-
-import { vecToAngles } from './core/math';
 import { Camera, type CameraFrame } from './cameras/camera';
 import { OrbitController } from './cameras/orbit-controller';
 import { Annotation } from './settings';
 import { Global } from './types';
 
 const tmpCamera = new Camera();
-const tmpv = new Vec3();
 
-// Fixed camera for real2sim: pos, rotation matrix, fov.
-const FIXED_CAMERA = {
-    pos: [0.4214223792319385, 0.5457549945299672, -1.2059909003747704] as [number, number, number],
-    rotationMatrix: [
-        [0.9786331529531755, 0.03990237507444073, -0.20170511248935927],
-        [-0.07133697531067347, 0.9859460257592279, -0.15106776705541258],
-        [0.19284239133149841, 0.16222895781272428, 0.9677259825759287]
-    ] as [[number, number, number], [number, number, number], [number, number, number]],
-    fovy: 44
+const STORAGE_KEY = 'supersplat_saved_view';
+
+type SavedView = {
+    position: [number, number, number];
+    angles: [number, number, number];
+    distance: number;
+    fov: number;
+};
+
+const loadSavedView = (): SavedView | null => {
+    try {
+        const s = localStorage.getItem(STORAGE_KEY);
+        console.log('Loading saved view from localStorage:', s);
+        if (!s) return null;
+        const v = JSON.parse(s) as SavedView;
+        if (Array.isArray(v?.position) && Array.isArray(v?.angles) && typeof v?.distance === 'number' && typeof v?.fov === 'number') {
+            console.log('Successfully loaded saved view:', v);
+            return v;
+        }
+    } catch (e) {
+        console.error('Error loading saved view:', e);
+    }
+    return null;
+};
+
+const saveViewToStorage = (camera: Camera) => {
+    const v: SavedView = {
+        position: [camera.position.x, camera.position.y, camera.position.z],
+        angles: [camera.angles.x, camera.angles.y, camera.angles.z],
+        distance: camera.distance,
+        fov: camera.fov
+    };
+    console.log('Saving view to localStorage:', v);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(v));
+};
+
+const createCameraFromSavedView = (v: SavedView): Camera => {
+    const cam = new Camera();
+    cam.position.set(v.position[0], v.position[1], v.position[2]);
+    cam.angles.set(v.angles[0], v.angles[1], v.angles[2]);
+    cam.distance = v.distance;
+    cam.fov = v.fov;
+    return cam;
 };
 
 const createCamera = (position: Vec3, target: Vec3, fov: number) => {
@@ -30,46 +59,6 @@ const createCamera = (position: Vec3, target: Vec3, fov: number) => {
     result.look(position, target);
     result.fov = fov;
     return result;
-};
-
-const createFixedCamera = (): Camera => {
-    const cam = new Camera();
-
-    cam.position.set(FIXED_CAMERA.pos[0], FIXED_CAMERA.pos[1], FIXED_CAMERA.pos[2]);
-    cam.fov = FIXED_CAMERA.fovy;
-
-    const m = FIXED_CAMERA.rotationMatrix;
-
-    // Extract vectors EXACTLY like the gizmo does
-    const forward = new Vec3(m[0][2], m[1][2], m[2][2]).normalize();
-    const up = new Vec3(m[0][1], m[1][1], m[2][1]).normalize();
-    const right = new Vec3(m[0][0], m[1][0], m[2][0]).normalize();
-
-    // Build rotation matrix from these vectors
-    // Camera looks in -Z direction, so we need to negate forward
-    const mat = new Mat4();
-    // Right vector (X axis)
-    mat.data[0] = right.x; mat.data[1] = right.y; mat.data[2] = right.z; mat.data[3] = 0;
-    // Up vector (Y axis)
-    mat.data[4] = up.x; mat.data[5] = up.y; mat.data[6] = up.z; mat.data[7] = 0;
-    // Negative forward vector (Z axis) because camera looks in -Z
-    mat.data[8] = -forward.x; mat.data[9] = -forward.y; mat.data[10] = -forward.z; mat.data[11] = 0;
-    mat.data[12] = 0; mat.data[13] = 0; mat.data[14] = 0; mat.data[15] = 1;
-
-    const quat = new Quat();
-    quat.setFromMat4(mat);
-    quat.getEulerAngles(cam.angles);
-
-    console.log('=== Fixed Camera Debug ===');
-    console.log('Position:', cam.position);
-    console.log('Forward:', forward);
-    console.log('Up:', up);
-    console.log('Right:', right);
-    console.log('Angles:', cam.angles);
-
-    cam.distance = 1.0;
-
-    return cam;
 };
 
 const createFrameCamera = (bbox: BoundingBox, fov: number) => {
@@ -94,14 +83,14 @@ class CameraManager {
 
         const camera0 = settings.cameras[0].initial;
         const frameCamera = createFrameCamera(bbox, camera0.fov);
-
-        // Use fixed camera as default reset position
-        const fixedCamera = createFixedCamera();
-        const defaultResetCamera = fixedCamera;
-        let resetCamera = defaultResetCamera;
+        const defaultResetCamera = frameCamera;
+        const savedFromStorage = loadSavedView();
+        console.log('Initializing camera - savedFromStorage:', savedFromStorage);
+        let resetCamera = savedFromStorage ? createCameraFromSavedView(savedFromStorage) : defaultResetCamera;
 
         const orbit = new OrbitController();
         this.camera.copy(resetCamera);
+        console.log('Initial camera position:', this.camera.position, 'angles:', this.camera.angles);
         orbit.onEnter(this.camera);
 
         const target = new Camera(this.camera);
@@ -143,11 +132,15 @@ class CameraManager {
 
         events.on('saveResetView', () => {
             this.savedResetCamera = new Camera(this.camera);
-            console.log('Saved current view as reset position');
+            saveViewToStorage(this.camera);
+            console.log('Saved current view as reset position (persisted to localStorage)');
         });
 
         events.on('restoreDefaultResetView', () => {
             this.savedResetCamera = null;
+            localStorage.removeItem(STORAGE_KEY);
+            resetCamera = defaultResetCamera;
+            orbit.goto(defaultResetCamera);
             console.log('Restored default reset view');
         });
     }

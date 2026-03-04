@@ -81,27 +81,21 @@
                         </svg>
                     </button>
 
-                    <button id="info" class="controlButton">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
-                            <g class='stroke'><use href="#infoIcon"/></g>
-                            <g class='fill'><use href="#infoIcon"/></g>
-                        </svg>
-                    </button>
                     <button id="settings" class="controlButton">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28">
                             <g class='stroke'><use href="#settingsIcon"/></g>
                             <g class='fill'><use href="#settingsIcon"/></g>
                         </svg>
                     </button>
 
                     <button id="enterFullscreen" class="controlButton">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28">
                             <g class='stroke'><use href="#enterFullscreenIcon"/></g>
                             <g class='fill'><use href="#enterFullscreenIcon"/></g>
                         </svg>
                     </button>
                     <button id="exitFullscreen" class="controlButton hidden">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28">
                             <g class='stroke'><use href="#exitFullscreenIcon"/></g>
                             <g class='fill'><use href="#exitFullscreenIcon"/></g>
                         </svg>
@@ -111,72 +105,47 @@
 
             <!-- Settings Panel -->
             <div id="settingsPanel" class="hidden">
-                <div class="settingsSection">
+                <div class="settingsSection boxedSection">
                     <div class="settingsSectionTitle">Camera</div>
-                    <div class="settingsRow" style="flex-wrap: wrap; gap: 8px;">
-                        <button id="frameTop" class="settingsBtn" title="Frame Scene (F)">Frame</button>
-                        <button id="resetTop" class="settingsBtn" title="Reset View (R)">Reset</button>
-                        <button id="centersToggle" class="settingsBtn toggle" title="Centers">Centers</button>
-                        <button id="filterToggle" class="settingsBtn toggle" title="Filter">Filter</button>
-                    </div>
+                    <button id="frameTop" class="settingsBtn" title="Frame Scene (F)">Frame</button>
+                    <button id="resetTop" class="settingsBtn" title="Reset View (R)">Reset</button>
+                    <button id="saveResetView" class="settingsBtn">Save Default</button>
+                    <button id="restoreDefaultView" class="settingsBtn">Restore Factory</button>
                 </div>
-                <div class="settingsSection">
+                <div class="settingsSection boxedSection">
                     <div class="settingsSectionTitle">Render</div>
-                    <div class="settingsRow" data-option="hq">
-                        <div id="hqCheck" class="checkMark">✓</div>
-                        <div id="hqOption">High Quality</div>
-                    </div>
-                    <div class="settingsRow" data-option="lq">
-                        <div id="lqCheck" class="checkMark">✓</div>
-                        <div id="lqOption">Low Quality</div>
-                    </div>
-                    <div class="settingsRow" data-option="off">
-                        <div id="offCheck" class="checkMark">✓</div>
-                        <div id="offOption">Off</div>
-                    </div>
-                    <div class="settingsRow" data-option="depth">
-                        <div id="depthCheck" class="checkMark">✓</div>
-                        <div id="depthOption">Depth</div>
-                    </div>
-                </div>
-                <div class="settingsSection" id="centersSection">
-                    <div class="settingsRow settingsToggleRow" id="centersToggle" data-toggle="centers">
-                        <div id="centersCheck" class="checkMark">✓</div>
-                        <div id="centersOption">Centers</div>
-                    </div>
-                    <div id="centersSettings" class="settingsSubSection" style="display: none;">
-                        <div class="settingsRow">
-                            <label for="centersSizeSlider">Point Size</label>
-                            <input type="range" id="centersSizeSlider" min="0.6" max="0.9" step="0.01" value="0.75">
-                            <span id="centersSizeValue">0.75</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="settingsSection" id="filterSection">
-                    <div class="settingsRow settingsToggleRow" id="filterToggle" data-toggle="filter">
-                        <div id="filterCheck" class="checkMark">✓</div>
-                        <div id="filterOption">Filter</div>
-                    </div>
-                    <div id="filterSettings" class="settingsSubSection" style="display: none;">
-                        <div class="settingsRow">
-                            <label for="depthFilterSlider">Depth Range</label>
-                            <input type="range" id="depthFilterSlider" min="-0.0005" max="0.001" step="0.0001" value="0.00025" title="Arrow keys or +/- to adjust">
-                            <span id="depthFilterValue">0.0003</span>
-                        </div>
                     <div class="settingsRow">
-                        <div id="showFilteredCheck" class="checkMark">✓</div>
-                        <div id="showFilteredOption">Show Filtered</div>
+                        <label for="renderModeSelect">Mode</label>
+                        <select id="renderModeSelect">
+                            <option value="high">High Quality</option>
+                            <option value="low">Low Quality</option>
+                            <option value="off">Off</option>
+                            <option value="depth">Depth</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="settingsSection boxedSection">
+                    <div class="settingsSectionTitle">Point Cloud</div>
+                    <button id="showCentersBtn" class="settingsBtn toggleBtn">Show Centers</button>
+                    <div class="settingsRow">
+                        <label for="centersSizeSlider">Size</label>
+                        <input type="range" id="centersSizeSlider" min="0.01" max="0.3" step="0.01" value="0.05">
+                        <span id="centersSizeValue">0.05</span>
+                    </div>
+                </div>
+                <div class="settingsSection boxedSection">
+                    <div class="settingsSectionTitle">Depth</div>
+                    <button id="depthFilterBtn" class="settingsBtn toggleBtn">Depth Filter</button>
+                    <div class="settingsRow">
+                        <label for="depthFilterSlider">Range</label>
+                        <input type="range" id="depthFilterSlider" min="-0.0005" max="0.001" step="0.0001" value="0" title="Depth filter range">
+                        <span id="depthFilterValue">0.0000</span>
                     </div>
                     <div class="settingsRow" id="filterStatsRow" style="display: none;">
                         <span>Total <strong id="filterStatsTotal">0</strong></span>
                         <span>Visible <strong id="filterStatsVisible">0</strong></span>
                         <span>Filtered <strong id="filterStatsFiltered">0</strong></span>
                     </div>
-                </div>
-                <div class="settingsSection">
-                    <div class="settingsSectionTitle">View</div>
-                    <button id="saveResetView" class="settingsBtn">Save Default</button>
-                    <button id="restoreDefaultView" class="settingsBtn">Restore Factory</button>
                 </div>
             </div>
 
@@ -259,6 +228,33 @@
                 <path d="M21 14.7002C21.4969 14.7002 21.9002 15.1027 21.9004 15.5996V20C21.9004 21.0493 21.0493 21.9004 20 21.9004H15.5996C15.1027 21.9002 14.7002 21.4969 14.7002 21C14.7002 20.5031 15.1027 20.0998 15.5996 20.0996H20C20.0552 20.0996 20.0996 20.0552 20.0996 20V15.5996C20.0998 15.1027 20.5031 14.7002 21 14.7002Z"/>
                 <path d="M8.40039 2.09961C8.89727 2.09982 9.2998 2.50307 9.2998 3C9.2998 3.49693 8.89727 3.90018 8.40039 3.90039H4C3.94477 3.90039 3.90039 3.94477 3.90039 4V8.40039C3.90018 8.89727 3.49693 9.2998 3 9.2998C2.50307 9.2998 2.09982 8.89727 2.09961 8.40039V4C2.09961 2.95066 2.95066 2.09961 4 2.09961H8.40039Z"/>
                 <path d="M20 2.09961C21.0493 2.09961 21.9004 2.95066 21.9004 4V8.40039C21.9002 8.89727 21.4969 9.2998 21 9.2998C20.5031 9.2998 20.0998 8.89727 20.0996 8.40039V4C20.0996 3.94477 20.0552 3.90039 20 3.90039H15.5996C15.1027 3.90018 14.7002 3.49693 14.7002 3C14.7002 2.50307 15.1027 2.09982 15.5996 2.09961H20Z"/>
+            </symbol>
+            <symbol id="selectPointIcon" viewBox="0 0 24 24">
+                <path fill-rule="evenodd" clip-rule="evenodd" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
+            </symbol>
+            <symbol id="clearIcon" viewBox="0 0 24 24">
+                <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
+            </symbol>
+            <symbol id="saveIcon" viewBox="0 0 24 24">
+                <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
+            </symbol>
+            <symbol id="normalIcon" viewBox="0 0 24 24">
+                <path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8-8-8z"/>
+            </symbol>
+            <symbol id="eraserIcon" viewBox="0 0 24 24">
+                <path d="M16.24 3.56l4.95 4.94c.78.78.78 2.05 0 2.83L12 20.29c-.78.78-2.05.78-2.83 0L3.27 14.12c-.78-.78-.78-2.05 0-2.83l9.17-9.17c.78-.78 2.05-.78 2.83 0z"/>
+            </symbol>
+            <symbol id="boxSelectIcon" viewBox="0 0 24 24">
+                <path d="M3 5v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2zm16 0v14H5V5h14z"/>
+            </symbol>
+            <symbol id="undoIcon" viewBox="0 0 24 24">
+                <path d="M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z"/>
+            </symbol>
+            <symbol id="applyIcon" viewBox="0 0 24 24">
+                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+            </symbol>
+            <symbol id="loadIcon" viewBox="0 0 24 24">
+                <path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/>
             </symbol>
             <symbol id="exitFullscreenIcon" viewBox="0 0 24 24">
                 <path d="M8 15.0996C8.49706 15.0996 8.90039 15.5029 8.90039 16V21C8.90039 21.4971 8.49706 21.9004 8 21.9004C7.50294 21.9004 7.09961 21.4971 7.09961 21V16.9004H3C2.50294 16.9004 2.09961 16.4971 2.09961 16C2.09961 15.5029 2.50294 15.0996 3 15.0996H8Z" />

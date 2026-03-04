@@ -19,6 +19,7 @@ export interface MarkedPoint {
 }
 
 const MAX_POINTS = 20;
+const MAGNIFY_MULTIPLIER = 2.5; // 放大键时球体为当前大小的倍数
 
 // Pre-calculate 20 colors with higher contrast
 function hslToRgb(h: number, s: number, l: number): { r: number; g: number; b: number } {
@@ -61,7 +62,7 @@ export class PointMarker {
     private nextColorId = 0;
     private pointSpheres = new Map<number, { entity: Entity; meshInstance: MeshInstance; isHovered: boolean }>();
     hoveredListItemIndex: number | null = null;
-    private currentSphereSize = 0.03; // Large size for better visibility (3x larger)
+    private currentSphereSize = 0.065;
     
     // Callbacks
     onPointsChanged?: () => void;
@@ -99,12 +100,11 @@ export class PointMarker {
     }
 
     selectPoint(index: number, position: Vec3, originalColor: Color): boolean {
-        // Check if already selected
-        if (this.selectedPoints.find(p => p.index === index)) {
-            return false; // Already selected
+        // Check if already selected (skip for display-only points with index -1)
+        if (index >= 0 && this.selectedPoints.find(p => p.index === index)) {
+            return false;
         }
 
-        // Assign a fixed colorId to this point
         const colorId = this.nextColorId++;
         const point: MarkedPoint = {
             index,
@@ -118,6 +118,11 @@ export class PointMarker {
         this.app.renderNextFrame = true;
         this.onPointsChanged?.();
         return true;
+    }
+
+    /** Add point at exact position (for JSON load without cloud match). Uses index -1. */
+    addPointAtPosition(position: Vec3): boolean {
+        return this.selectPoint(-1, position, new Color(0.5, 0.5, 0.5));
     }
 
     deletePointByIndex(arrayIndex: number): boolean {
@@ -223,6 +228,10 @@ export class PointMarker {
         this.app.renderNextFrame = true;
     }
 
+    getSphereSize(): number {
+        return this.currentSphereSize;
+    }
+
     private createOrUpdateSphere(colorId: number, updateSize = false, hoverSize = false): void {
         const point = this.selectedPoints.find(p => p.colorId === colorId);
         if (!point) return;
@@ -242,7 +251,7 @@ export class PointMarker {
         // Determine sphere size
         let sphereSize = this.currentSphereSize;
         if (hoverSize) {
-            sphereSize = this.currentSphereSize * 2; // Double size when hovered
+            sphereSize = this.currentSphereSize * MAGNIFY_MULTIPLIER;
         }
         
         let sphereData = this.pointSpheres.get(colorId);
@@ -351,45 +360,41 @@ export class PointMarker {
         return sphereData?.entity || null;
     }
 
-    // JSON export/import
-    // 导出模型空间坐标：对 viewer 世界坐标做 -x, -y（撤销 entity 的 180° Z 旋转）
+   
     exportToJSON(): number[][] {
         return this.selectedPoints.map(point => [
-            -point.position.x,
-            -point.position.y,
+            point.position.x,
+            point.position.y,
             point.position.z
         ]);
     }
 
     async importFromJSON(
-        jsonData: number[][], 
-        findPointCallback: (x: number, y: number, z: number) => Promise<{ index: number; position: Vec3; color: Color } | null>
+        jsonData: number[][],
+        findPointCallback?: (x: number, y: number, z: number) => Promise<{ index: number; position: Vec3; color: Color } | null>,
+        displayDirect = true
     ): Promise<number> {
         let loadedCount = 0;
-        const tolerance = 0.001;
-        
-        // Clear existing points first
+        const tolerance = 0.01;
+
         this.clearAll();
-        
+
         for (const pointData of jsonData) {
-            if (!Array.isArray(pointData) || pointData.length < 3) {
-                continue;
-            }
-            
+            if (!Array.isArray(pointData) || pointData.length < 3) continue;
+
             const [x, y, z] = pointData;
             const targetPos = new Vec3(x, y, z);
-            const result = await findPointCallback(x, y, z);
-            
-            if (result) {
-                const distance = result.position.distance(targetPos);
-                if (distance <= tolerance) {
-                    if (this.selectPoint(result.index, result.position, result.color)) {
-                        loadedCount++;
-                    }
+
+            if (findPointCallback) {
+                const result = await findPointCallback(x, y, z);
+                if (result && result.position.distance(targetPos) <= tolerance) {
+                    if (this.selectPoint(result.index, result.position, result.color)) loadedCount++;
+                    continue;
                 }
             }
+            if (displayDirect && this.addPointAtPosition(targetPos)) loadedCount++;
         }
-        
+
         return loadedCount;
     }
 

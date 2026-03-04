@@ -144,17 +144,15 @@ const initUI = (global: Global) => {
     const docRoot = document.documentElement;
     const dom = [
         'ui',
-        'frameTop', 'resetTop', 'centersToggle', 'filterToggle',
-        'centersCheck', 'filterCheck',
+        'frameTop', 'resetTop', 'depthFilterBtn',
+        'showCentersBtn', 'centersSizeSlider', 'centersSizeValue',
         'controlsWrap',
         'arMode', 'vrMode',
         'enterFullscreen', 'exitFullscreen',
-        'info', 'infoPanel', 'desktopTab', 'touchTab', 'desktopInfoPanel', 'touchInfoPanel',
+        'infoPanel', 'desktopTab', 'touchTab', 'desktopInfoPanel', 'touchInfoPanel',
         'settings', 'settingsPanel',
-        'hqCheck', 'hqOption', 'lqCheck', 'lqOption', 'offCheck', 'offOption', 'depthCheck', 'depthOption',
-        'showFilteredCheck', 'showFilteredOption', 'filterStatsRow', 'filterStatsTotal', 'filterStatsVisible', 'filterStatsFiltered',
-        'centersSettings', 'filterSettings',
-        'centersSizeSlider', 'centersSizeValue',
+        'renderModeSelect',
+        'filterStatsRow', 'filterStatsTotal', 'filterStatsVisible', 'filterStatsFiltered',
         'depthFilterSlider', 'depthFilterValue',
         'saveResetView', 'restoreDefaultView',
         'loadingText', 'loadingBar',
@@ -164,20 +162,16 @@ const initUI = (global: Global) => {
         acc[id] = document.getElementById(id);
         return acc;
     }, {}) as Record<string, HTMLElement> & {
-        centersSizeSlider: HTMLInputElement;
+        renderModeSelect: HTMLSelectElement;
         depthFilterSlider: HTMLInputElement;
-        centersSettings: HTMLElement;
-        filterSettings: HTMLElement;
-        showFilteredCheck: HTMLElement;
-        showFilteredOption: HTMLElement;
         filterStatsRow: HTMLElement;
         filterStatsTotal: HTMLElement;
         filterStatsVisible: HTMLElement;
         filterStatsFiltered: HTMLElement;
-        centersToggle: HTMLElement;
-        filterToggle: HTMLElement;
-        centersCheck: HTMLElement;
-        filterCheck: HTMLElement;
+        showCentersBtn: HTMLElement;
+        centersSizeSlider: HTMLInputElement;
+        centersSizeValue: HTMLElement;
+        depthFilterBtn: HTMLElement;
         frameTop: HTMLElement;
         resetTop: HTMLElement;
     };
@@ -245,30 +239,16 @@ const initUI = (global: Global) => {
         dom.exitFullscreen.classList[value ? 'remove' : 'add']('hidden');
     });
 
-    // Render mode
-    dom.hqOption.addEventListener('click', () => {
-        state.renderMode = 'high';
+    // Render mode dropdown (High/Low/Off/Depth)
+    dom.renderModeSelect.addEventListener('change', () => {
+        const value = dom.renderModeSelect.value as 'high' | 'low' | 'off' | 'depth';
+        state.renderMode = value;
+        events.fire('renderMode:changed', value);
     });
-    dom.lqOption.addEventListener('click', () => {
-        state.renderMode = 'low';
+    events.on('renderMode:changed', (value: string) => {
+        dom.renderModeSelect.value = value;
     });
-    dom.offOption.addEventListener('click', () => {
-        state.renderMode = 'off';
-    });
-    dom.depthOption.addEventListener('click', () => {
-        state.renderMode = 'depth';
-    });
-
-    const updateRenderMode = () => {
-        dom.hqCheck.classList[state.renderMode === 'high' ? 'add' : 'remove']('active');
-        dom.lqCheck.classList[state.renderMode === 'low' ? 'add' : 'remove']('active');
-        dom.offCheck.classList[state.renderMode === 'off' ? 'add' : 'remove']('active');
-        dom.depthCheck.classList[state.renderMode === 'depth' ? 'add' : 'remove']('active');
-    };
-    events.on('renderMode:changed', () => {
-        updateRenderMode();
-    });
-    updateRenderMode();
+    dom.renderModeSelect.value = state.renderMode;
 
     // AR/VR
     const arChanged = () => dom.arMode.classList[state.hasAR ? 'remove' : 'add']('hidden');
@@ -304,11 +284,6 @@ const initUI = (global: Global) => {
 
     dom.touchTab.addEventListener('click', () => {
         updateInfoTab('touch');
-    });
-
-    dom.info.addEventListener('click', () => {
-        updateInfoTab(state.inputMode);
-        dom.infoPanel.classList.toggle('hidden');
     });
 
     dom.infoPanel.addEventListener('pointerdown', () => {
@@ -355,19 +330,6 @@ const initUI = (global: Global) => {
         dom.settingsPanel.classList.toggle('hidden');
     });
 
-    // Centers point size slider
-    dom.centersSizeSlider.addEventListener('input', (e: Event) => {
-        const value = parseFloat((e.target as HTMLInputElement).value);
-        state.centersPointSize = value;
-        dom.centersSizeValue.textContent = value.toFixed(2);
-        events.fire('centersPointSize:changed', value);
-    });
-
-    events.on('centersPointSize:changed', (value: number) => {
-        dom.centersSizeSlider.value = value.toString();
-        dom.centersSizeValue.textContent = value.toFixed(2);
-    });
-
     // Depth filter slider
     dom.depthFilterSlider.addEventListener('input', (e: Event) => {
         const value = parseFloat((e.target as HTMLInputElement).value);
@@ -404,22 +366,6 @@ const initUI = (global: Global) => {
     // Make slider focusable for keyboard control
     dom.depthFilterSlider.setAttribute('tabindex', '0');
 
-    // Track show filtered points state locally for UI visibility logic
-    let showFilteredPoints = false;
-
-    // Show filtered points toggle
-    dom.showFilteredOption.addEventListener('click', () => {
-        events.fire('showFilteredPoints:toggle');
-    });
-
-    // Update show filtered points checkmark when state changes
-    events.on('showFilteredPoints:changed', (value: boolean) => {
-        showFilteredPoints = value;
-        dom.showFilteredCheck.classList[value ? 'add' : 'remove']('active');
-        // Show/hide filter statistics based on Show Filtered Points state
-        dom.filterStatsRow.style.display = (value && depthFilterEnabled) ? 'flex' : 'none';
-    });
-
     // Update filter statistics
     events.on('filterStats:changed', (stats: { total: number; visible: number; filtered: number }) => {
         dom.filterStatsTotal.textContent = stats.total.toLocaleString();
@@ -436,43 +382,42 @@ const initUI = (global: Global) => {
         events.fire('inputEvent', 'reset', event);
     });
 
-    // Top toolbar - Centers toggle
-    dom.centersToggle.addEventListener('click', () => {
+    // Point Cloud - Show Centers button
+    dom.showCentersBtn.addEventListener('click', () => {
         state.showCenters = !state.showCenters;
+        events.fire('showCenters:changed', state.showCenters);
     });
 
     events.on('showCenters:changed', (value: boolean) => {
-        dom.centersCheck.classList[value ? 'add' : 'remove']('active');
-        dom.centersSettings.style.display = value ? 'block' : 'none';
+        dom.showCentersBtn.classList[value ? 'add' : 'remove']('active');
+        dom.showCentersBtn.textContent = value ? 'Hide Centers' : 'Show Centers';
     });
 
-    // Initialize Centers
-    dom.centersCheck.classList[state.showCenters ? 'add' : 'remove']('active');
-    dom.centersSettings.style.display = state.showCenters ? 'block' : 'none';
+    dom.showCentersBtn.classList[state.showCenters ? 'add' : 'remove']('active');
+    dom.showCentersBtn.textContent = state.showCenters ? 'Hide Centers' : 'Show Centers';
 
-    // Camera Gizmo toggle (keyboard shortcut 'G')
-    events.on('keyboard:g', () => {
-        state.showCameraGizmo = !state.showCameraGizmo;
-        events.fire('showCameraGizmo:changed', state.showCameraGizmo);
-        console.log('Camera gizmo visibility:', state.showCameraGizmo);
+    // Point Cloud - Centers size slider (0.01 - 0.3)
+    dom.centersSizeSlider.addEventListener('input', (e: Event) => {
+        const value = parseFloat((e.target as HTMLInputElement).value);
+        dom.centersSizeValue.textContent = value.toFixed(2);
+        events.fire('centersPointSize:changed', value);
     });
 
-    // Filter toggle
-    dom.filterToggle.addEventListener('click', () => {
-        events.fire('depthFilter:toggle');
+    events.on('centersPointSize:changed', (value: number) => {
+        dom.centersSizeSlider.value = String(value);
+        dom.centersSizeValue.textContent = value.toFixed(2);
     });
 
-    // Track depth filter state for UI
+    // Depth Filter button
+    dom.depthFilterBtn.addEventListener('click', () => events.fire('depthFilter:toggle'));
+
     let depthFilterEnabled = false;
     events.on('depthFilterEnabled:changed', (value: boolean) => {
         depthFilterEnabled = value;
-        dom.filterCheck.classList[value ? 'add' : 'remove']('active');
-        dom.filterSettings.style.display = value ? 'block' : 'none';
+        dom.depthFilterBtn.classList[value ? 'add' : 'remove']('active');
+        dom.filterStatsRow.style.display = value ? 'flex' : 'none';
     });
-
-    // Initialize Filter
-    dom.filterCheck.classList.remove('active');
-    dom.filterSettings.style.display = 'none';
+    dom.filterStatsRow.style.display = 'none';
 
     // Fly camera button removed (only orbit mode, matching Three.js OrbitControls)
     // dom.flyCamera.addEventListener('click', () => {
@@ -501,7 +446,6 @@ const initUI = (global: Global) => {
     tooltip.register(dom.saveResetView, 'Save Current View as Default Reset Position', 'bottom');
     tooltip.register(dom.restoreDefaultView, 'Restore Factory Default View', 'bottom');
     tooltip.register(dom.settings, 'Settings', 'top');
-    tooltip.register(dom.info, 'Help', 'top');
     tooltip.register(dom.arMode, 'Enter AR', 'top');
     tooltip.register(dom.vrMode, 'Enter VR', 'top');
     tooltip.register(dom.enterFullscreen, 'Fullscreen', 'top');

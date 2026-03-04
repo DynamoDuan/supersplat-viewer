@@ -43,7 +43,7 @@ class CentersOverlay {
     private unselectedColor = new Color(0.5, 0.5, 0.5, 0.8);
     private highlightedPointId = -1;
     private maxPoints = 100000;  // Maximum number of points to display (default: 100k)
-    private depthThreshold = 0.02;
+    private depthThreshold = 0;
     private depthFilterEnabled = false;
     private showFilteredPoints = false;  // Show filtered points with different color
     private filteredPointColor = new Color(1.0, 0.0, 0.0, 1.0);  // Red for filtered points
@@ -749,6 +749,7 @@ class CentersOverlay {
             const filterIdx = i * 4;
             const isFiltered = filterPixels[filterIdx] > 0; // R channel = filter state
             const isErased = filterPixels[filterIdx + 1] > 0; // G channel = erased state
+            const isErasePreview = filterPixels[filterIdx + 2] > 0; // B channel = erase preview (red)
             const isCursorHighlight = this.cursorHighlightEnabled && highlightSet.has(i);
 
             const vertexOffset = i * stride;
@@ -761,6 +762,12 @@ class CentersOverlay {
                 colorView[colorIdx + 2] = 0;
                 colorView[colorIdx + 3] = 0;
                 erasedCount++;
+            } else if (isErasePreview) {
+                // Erase preview: red highlight for points in range
+                colorView[colorIdx] = 255;
+                colorView[colorIdx + 1] = 0;
+                colorView[colorIdx + 2] = 0;
+                colorView[colorIdx + 3] = 255;
             } else if (isCursorHighlight) {
                 // Cursor highlight points shown in green (highest priority)
                 colorView[colorIdx] = Math.floor(this.cursorHighlightColor.r * 255);
@@ -794,16 +801,6 @@ class CentersOverlay {
 
         this.filterStateTexture.unlock();
 
-        console.log('updateVertexColorsFromFilterState:', {
-            total: numSplats,
-            normal: normalCount,
-            highlighted: highlightCount,
-            filteredVisible: filteredVisibleCount,
-            filteredHidden: filteredHiddenCount,
-            erased: erasedCount,
-            showFilteredPoints: this.showFilteredPoints
-        });
-
         // Update vertex buffer with new colors
         vertexBuffer.setData(vertexData);
     }
@@ -822,6 +819,7 @@ class CentersOverlay {
             }
         }
         this.filterStateTexture.unlock();
+        this.updateVertexColorsFromFilterState();
     }
 
     /**
@@ -834,6 +832,7 @@ class CentersOverlay {
             pixels[i + 2] = 0;
         }
         this.filterStateTexture.unlock();
+        this.updateVertexColorsFromFilterState();
     }
 
     /**
@@ -899,11 +898,50 @@ class CentersOverlay {
         return count;
     }
 
+    /** Stack of erase operations for undo. Each item is the set of indices erased in that operation. */
+    private eraseHistory: Set<number>[] = [];
+
     /**
-     * Un-erase all splats.
+     * Record an erase operation for undo (call when stroke/box select completes).
+     */
+    pushEraseOperation(indices: number[]) {
+        if (indices.length === 0) return;
+        this.eraseHistory.push(new Set(indices));
+    }
+
+    /**
+     * Un-erase the indices in the given set.
+     */
+    uneraseIndices(indices: Set<number>) {
+        if (!this.filterStateTexture || indices.size === 0) return;
+        const pixels = this.filterStateTexture.lock();
+        for (const idx of indices) {
+            const pixelIdx = idx * 4;
+            if (pixelIdx + 1 < pixels.length) {
+                pixels[pixelIdx + 1] = 0; // clear G channel
+            }
+        }
+        this.filterStateTexture.unlock();
+        this.updateVertexColorsFromFilterState();
+    }
+
+    /**
+     * Undo only the most recent eraser stroke or box select.
+     * @returns true if something was undone
+     */
+    uneraseLastOperation(): boolean {
+        const op = this.eraseHistory.pop();
+        if (!op || op.size === 0) return false;
+        this.uneraseIndices(op);
+        this.app.renderNextFrame = true;
+        return true;
+    }
+
+    /**
+     * Un-erase all splats (legacy / clear all).
      */
     uneraseSplats() {
-        // Clear filterStateTexture G channel
+        this.eraseHistory = [];
         if (this.filterStateTexture) {
             const pixels = this.filterStateTexture.lock();
             for (let i = 0; i < pixels.length; i += 4) {

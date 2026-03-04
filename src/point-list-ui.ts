@@ -7,6 +7,7 @@ export class PointListUI {
     private pointMarker: PointMarker;
     private draggedItemIndex: number | null = null;
     private draggedOverItemIndex: number | null = null;
+    onHeightChange?: (pointCount: number) => void;
 
     constructor(container: HTMLElement, pointMarker: PointMarker) {
         this.container = container;
@@ -17,11 +18,28 @@ export class PointListUI {
             <div class="point-list-panel">
                 <h2 class="point-list-title">Selected Points (<span id="pointCount">0</span>)</h2>
                 <div id="annotationsList" class="point-list-items"></div>
+                <div class="marker-size-row">
+                    <label for="markerSizeSlider">Marker Size</label>
+                    <input type="range" id="markerSizeSlider" min="0.005" max="0.15" step="0.005" value="0.065">
+                    <span id="markerSizeValue">0.065</span>
+                </div>
             </div>
         `;
         
         this.pointCountElement = document.getElementById('pointCount')!;
         this.listElement = document.getElementById('annotationsList')!;
+
+        // Marker size slider
+        const markerSizeSlider = this.container.querySelector('#markerSizeSlider') as HTMLInputElement;
+        const markerSizeValue = this.container.querySelector('#markerSizeValue') as HTMLElement;
+        const baseSize = this.pointMarker.getSphereSize();
+        markerSizeSlider.value = String(baseSize);
+        markerSizeValue.textContent = baseSize.toFixed(3);
+        markerSizeSlider.addEventListener('input', () => {
+            const v = parseFloat(markerSizeSlider.value);
+            this.pointMarker.setSphereSize(v);
+            markerSizeValue.textContent = v.toFixed(3);
+        });
         
         // Prevent wheel events from bubbling to canvas (which would trigger zoom)
         this.container.addEventListener('wheel', (e) => {
@@ -56,20 +74,24 @@ export class PointListUI {
         style.id = styleId;
         style.textContent = `
             .point-list-panel {
+                display: flex;
+                flex-direction: column;
                 padding: 12px 16px;
                 background: rgba(15, 23, 42, 0.95);
-                border-left: 1px solid rgba(255,255,255,0.08);
+                border-right: 1px solid rgba(255,255,255,0.08);
                 height: 100%;
-                overflow-y: auto;
+                overflow: hidden;
             }
             .point-list-title {
-                font-size: 13px;
+                font-size: 20px;
                 font-weight: 600;
                 color: #e8e6e3;
                 margin-bottom: 12px;
+                flex-shrink: 0;
             }
             .point-list-items {
-                max-height: calc(100vh - 120px);
+                flex: 1;
+                min-height: 0;
                 overflow-y: auto;
             }
             .annotation-item {
@@ -77,7 +99,7 @@ export class PointListUI {
                 background: rgba(51, 65, 85, 0.5);
                 border-radius: 8px;
                 margin-bottom: 6px;
-                font-size: 12px;
+                font-size: 16px;
                 display: flex;
                 align-items: center;
                 gap: 8px;
@@ -117,7 +139,10 @@ export class PointListUI {
             .annotation-item .point-info {
                 color: #94a3b8;
                 font-family: ui-monospace, monospace;
-                font-size: 11px;
+                font-size: 13px;
+                white-space: nowrap;
+                overflow-x: auto;
+                min-width: 0;
             }
             .magnify-btn, .delete-btn {
                 background: transparent;
@@ -144,6 +169,42 @@ export class PointListUI {
             .point-list-items::-webkit-scrollbar-thumb {
                 background: rgba(100, 116, 139, 0.5);
                 border-radius: 3px;
+            }
+            .marker-size-row {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                padding: 10px 0 4px;
+                margin-top: auto;
+                border-top: 1px solid rgba(255,255,255,0.08);
+                flex-shrink: 0;
+            }
+            .marker-size-row label {
+                font-size: 13px;
+                color: #94a3b8;
+                min-width: 72px;
+            }
+            .marker-size-row input[type="range"] {
+                flex: 1;
+                min-width: 80px;
+                height: 6px;
+                -webkit-appearance: none;
+                background: rgba(15, 23, 42, 0.8);
+                border-radius: 3px;
+            }
+            .marker-size-row input[type="range"]::-webkit-slider-thumb {
+                -webkit-appearance: none;
+                width: 14px;
+                height: 14px;
+                border-radius: 50%;
+                background: #3b82f6;
+                cursor: pointer;
+            }
+            .marker-size-row span {
+                font-size: 13px;
+                color: #94a3b8;
+                min-width: 44px;
+                text-align: right;
             }
         `;
         document.head.appendChild(style);
@@ -185,6 +246,7 @@ export class PointListUI {
     updateList(): void {
         const points = this.pointMarker.selectedPoints;
         this.pointCountElement.textContent = points.length.toString();
+        this.onHeightChange?.(points.length);
         this.listElement.innerHTML = '';
 
         points.forEach((point, idx) => {

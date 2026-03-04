@@ -39,8 +39,7 @@ import { NormalMarker } from './normal-marker';
 import { NormalListUI } from './normal-list-ui';
 import { computePCANormalFromPoints, computeCentroid } from './pca-normal';
 import { depthGsplatVS, depthGsplatVS_WGSL } from './shaders/depth-shader';
-import { AxisHelper } from './axis-helper';
-import { CameraGizmo } from './camera-gizmo';
+import { GravityHelper } from './axis-helper';
 
 // override global pick to pack depth instead of meshInstance id
 const pickDepthGlsl = /* glsl */ `
@@ -158,9 +157,8 @@ class Viewer {
 
     private _gsplatMaterial: any = null;
 
-    private axisHelper: AxisHelper | null = null;
+    private gravityHelper: GravityHelper | null = null;
 
-    private cameraGizmo: CameraGizmo | null = null;
 
     constructor(global: Global, gsplatLoad: Promise<Entity>, skyboxLoad: Promise<void>) {
         this.global = global;
@@ -344,12 +342,12 @@ class Viewer {
         // Listen for showCenters state changes
         events.on('showCenters:changed', (value: boolean) => {
             this.centersOverlay.setEnabled(value);
-            console.log('showCenters changed to:', value, 'overlay enabled:', this.centersOverlay.isEnabled);
         });
 
-        // Listen for centers point size changes
+        // Listen for centers point size changes (0.01 - 0.3)
         events.on('centersPointSize:changed', (value: number) => {
             this.centersOverlay.setPointSize(value);
+            app.renderNextFrame = true;
         });
 
         // Depth filter
@@ -467,42 +465,18 @@ class Viewer {
             }
         });
 
-        // Initialize point size from state
-        this.centersOverlay.setPointSize(state.centersPointSize);
+        // Initial point size from slider (0.05 default), marker size fixed
+        this.centersOverlay.setPointSize(0.05);
+        this.pointMarker.setSphereSize(0.065);
+        this.normalMarker.setSphereSize(0.065);
 
         // wait for the model to load
         Promise.all([gsplatLoad, skyboxLoad]).then((results) => {
             const gsplat = results[0]?.gsplat as GSplatComponent | null;
 
             if (gsplat) {
-                // Create axis helper to visualize world coordinate system
-                // X=Red, Y=Green, Z=Blue
-                this.axisHelper = new AxisHelper(app, 5.0);
-                console.log('World axes created: X=Red, Y=Green, Z=Blue');
-
-                // Create camera gizmo to visualize fixed camera position
-                // RED CONE points in the camera's forward direction
-                this.cameraGizmo = new CameraGizmo(app.root);
-                const m = [
-                    [0.9786331529531755, 0.03990237507444073, -0.20170511248935927],
-                    [-0.07133697531067347, 0.9859460257592279, -0.15106776705541258],
-                    [0.19284239133149841, 0.16222895781272428, 0.9677259825759287]
-                ];
-                const camPos = new Vec3(0.4214223792319385, 0.5457549945299672, -1.2059909003747704);
-                const camForward = new Vec3(m[0][2], m[1][2], m[2][2]).normalize();
-                const camUp = new Vec3(m[0][1], m[1][1], m[2][1]).normalize();
-                this.cameraGizmo.setPositionAndRotation(camPos, camForward, camUp);
-                console.log('Camera gizmo created - RED CONE shows forward direction');
-
-                // Listen for camera gizmo visibility changes
-                events.on('showCameraGizmo:changed', (value: boolean) => {
-                    if (this.cameraGizmo) {
-                        this.cameraGizmo.setVisible(value);
-                    }
-                });
-
-                // Set initial visibility
-                this.cameraGizmo.setVisible(state.showCameraGizmo);
+                // Normal direction helper - shows computed PCA normal in prominent axis style
+                this.gravityHelper = new GravityHelper(app);
 
                 // Attach centers overlay to gsplat entity
                 this.centersOverlay.attach(results[0]);
@@ -529,7 +503,7 @@ class Viewer {
                 import('./index').then(({ isPointCloudMode }) => {
                     if (isPointCloudMode()) {
                         state.showCenters = true;
-                        state.centersPointSize = 3;
+                        events.fire('showCenters:changed', true);
                     }
                 });
             }
@@ -542,18 +516,23 @@ class Viewer {
                 if (uiContainer) {
                     pointListContainer = document.createElement('div');
                     pointListContainer.id = 'pointListContainer';
-                    // Leave bottom space for settingsPanel (bottom: 86px + padding)
-                    pointListContainer.style.cssText = 'position: fixed; right: 0; top: 0; width: 300px; height: calc(100vh - 200px); z-index: 999; pointer-events: none;';
+                    const updatePanelHeight = (pointCount: number) => {
+                        const visible = Math.min(pointCount, 8);
+                        pointListContainer.style.height = `${82 + 50 * visible}px`;
+                    };
+                    pointListContainer.style.cssText = 'position: fixed; left: 0; top: 0; width: 310px; z-index: 999; pointer-events: none;';
+                    updatePanelHeight(0);
                     const innerContainer = document.createElement('div');
                     innerContainer.style.cssText = 'pointer-events: auto; height: 100%;';
                     pointListContainer.appendChild(innerContainer);
                     uiContainer.appendChild(pointListContainer);
                     this.pointListUI = new PointListUI(innerContainer, this.pointMarker);
+                    this.pointListUI.onHeightChange = updatePanelHeight;
 
                     // Create normal list container (hidden by default)
                     normalListContainer = document.createElement('div');
                     normalListContainer.id = 'normalListContainer';
-                    normalListContainer.style.cssText = 'position: fixed; right: 0; top: 0; width: 300px; height: calc(100vh - 200px); z-index: 999; pointer-events: none; display: none;';
+                    normalListContainer.style.cssText = 'position: fixed; left: 0; top: 0; width: 310px; height: 305px; z-index: 999; pointer-events: none; display: none;';
                     const normalInner = document.createElement('div');
                     normalInner.style.cssText = 'pointer-events: auto; height: 100%;';
                     normalListContainer.appendChild(normalInner);
@@ -718,6 +697,7 @@ class Viewer {
             });
 
             // Setup keyboard shortcuts and UI buttons for point marking
+            const svgIcon = (id: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28"><g class='stroke'><use href="#${id}"/></g><g class='fill'><use href="#${id}"/></g></svg>`;
             if (!config.noui) {
                 // Add UI buttons
                 const buttonsContainer = document.getElementById('buttonsContainer');
@@ -726,32 +706,32 @@ class Viewer {
                     selectBtn.id = 'toggleSelectBtn';
                     selectBtn.className = 'controlButton toggle';
                     selectBtn.title = 'Select Point';
-                    selectBtn.innerHTML = '📍';
-                    selectBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    selectBtn.innerHTML = svgIcon('selectPointIcon');
+                    selectBtn.style.cssText = 'font-size: 28px; padding: 10px;';
                     buttonsContainer.appendChild(selectBtn);
 
                     const clearBtn = document.createElement('button');
                     clearBtn.id = 'clearAllPointsBtn';
                     clearBtn.className = 'controlButton';
                     clearBtn.title = 'Clear All';
-                    clearBtn.innerHTML = '🗑️';
-                    clearBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    clearBtn.innerHTML = svgIcon('clearIcon');
+                    clearBtn.style.cssText = 'font-size: 28px; padding: 10px;';
                     buttonsContainer.appendChild(clearBtn);
 
                     const saveBtn = document.createElement('button');
                     saveBtn.id = 'savePointsBtn';
                     saveBtn.className = 'controlButton';
                     saveBtn.title = 'Save';
-                    saveBtn.innerHTML = '💾';
-                    saveBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    saveBtn.innerHTML = svgIcon('saveIcon');
+                    saveBtn.style.cssText = 'font-size: 28px; padding: 10px;';
                     buttonsContainer.appendChild(saveBtn);
 
                     const normalBtn = document.createElement('button');
                     normalBtn.id = 'toggleNormalBtn';
                     normalBtn.className = 'controlButton toggle';
                     normalBtn.title = 'Normal';
-                    normalBtn.innerHTML = '↗';
-                    normalBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    normalBtn.innerHTML = svgIcon('normalIcon');
+                    normalBtn.style.cssText = 'font-size: 28px; padding: 10px;';
                     buttonsContainer.appendChild(normalBtn);
 
                     saveBtn.addEventListener('click', () => {
@@ -829,14 +809,14 @@ class Viewer {
                     eraserBtn.id = 'toggleEraserBtn';
                     eraserBtn.className = 'controlButton';
                     eraserBtn.title = 'Toggle Eraser Mode (brush-erase splats)';
-                    eraserBtn.innerHTML = '&#x1F9F9;'; // 🧹 broom
-                    eraserBtn.style.cssText = 'font-size: 20px; padding: 8px; cursor: pointer;';
+                    eraserBtn.innerHTML = svgIcon('eraserIcon');
+                    eraserBtn.style.cssText = 'font-size: 28px; padding: 10px; cursor: pointer;';
                     // Box select state (declared early for mutual exclusion with eraser)
                     const boxSelectState = { enabled: false, isDrawing: false, startX: 0, startY: 0, prevRenderMode: 'high' as 'high' | 'low' | 'off' | 'depth', rectDiv: null as HTMLDivElement | null };
                     let boxSelectBtn: HTMLButtonElement | null = null;
 
                     // brushScale: multiplied by cameraDistance to get world-space brush radius
-                    const eraserModeState = { enabled: false, isErasing: false, brushScale: 0.0002, prevRenderMode: 'high' as 'high' | 'low' | 'off' | 'depth' };
+                    const eraserModeState = { enabled: false, isErasing: false, brushScale: 0.02, prevRenderMode: 'high' as 'high' | 'low' | 'off' | 'depth' };
                     const updateEraserCursor = () => {
                         canvas.style.cursor = 'crosshair';
                     };
@@ -888,9 +868,9 @@ class Viewer {
                         if (!eraserModeState.enabled) return;
                         e.preventDefault();
                         const factor = e.deltaY > 0 ? 0.8 : 1.25;
-                        eraserModeState.brushScale = Math.max(0.0001, Math.min(0.0005, eraserModeState.brushScale * factor));
+                        eraserModeState.brushScale = Math.max(0.005, Math.min(0.1, eraserModeState.brushScale * factor));
                         eraserSlider.value = String(eraserModeState.brushScale);
-                        eraserSliderValue.textContent = eraserModeState.brushScale.toFixed(4);
+                        eraserSliderValue.textContent = eraserModeState.brushScale.toFixed(3);
                     }, { passive: false });
                     buttonsContainer.appendChild(eraserBtn);
 
@@ -900,20 +880,20 @@ class Viewer {
                     eraserSliderContainer.style.cssText = 'display:none; align-items:center; gap:6px; padding:4px 8px; background:#333; border-radius:4px;';
                     const eraserSliderLabel = document.createElement('span');
                     eraserSliderLabel.textContent = 'Brush';
-                    eraserSliderLabel.style.cssText = 'font-size:12px; color:#ccc; white-space:nowrap;';
+                    eraserSliderLabel.style.cssText = 'font-size:14px; color:#ccc; white-space:nowrap;';
                     const eraserSlider = document.createElement('input');
                     eraserSlider.type = 'range';
-                    eraserSlider.min = '0.0001';
-                    eraserSlider.max = '0.0005';
-                    eraserSlider.step = '0.00001';
-                    eraserSlider.value = '0.0002';
+                    eraserSlider.min = '0.005';
+                    eraserSlider.max = '0.1';
+                    eraserSlider.step = '0.001';
+                    eraserSlider.value = '0.02';
                     eraserSlider.style.cssText = 'width:120px; cursor:pointer;';
                     const eraserSliderValue = document.createElement('span');
-                    eraserSliderValue.textContent = '0.0002';
-                    eraserSliderValue.style.cssText = 'font-size:12px; color:#ccc; min-width:50px;';
+                    eraserSliderValue.textContent = '0.02';
+                    eraserSliderValue.style.cssText = 'font-size:14px; color:#ccc; min-width:50px;';
                     eraserSlider.addEventListener('input', () => {
                         eraserModeState.brushScale = parseFloat(eraserSlider.value);
-                        eraserSliderValue.textContent = eraserModeState.brushScale.toFixed(4);
+                        eraserSliderValue.textContent = eraserModeState.brushScale.toFixed(3);
                     });
                     eraserSliderContainer.appendChild(eraserSliderLabel);
                     eraserSliderContainer.appendChild(eraserSlider);
@@ -924,24 +904,25 @@ class Viewer {
                     const undoEraserBtn = document.createElement('button');
                     undoEraserBtn.id = 'undoEraserBtn';
                     undoEraserBtn.className = 'controlButton';
-                    undoEraserBtn.title = 'Undo All Erased Points';
-                    undoEraserBtn.innerHTML = '&#x21A9;'; // ↩
-                    undoEraserBtn.style.cssText = 'font-size: 20px; padding: 8px; cursor: pointer;';
+                    undoEraserBtn.title = 'Undo Last Eraser or Box Select';
+                    undoEraserBtn.innerHTML = svgIcon('undoIcon');
+                    undoEraserBtn.style.cssText = 'font-size: 28px; padding: 10px; cursor: pointer;';
                     undoEraserBtn.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        this.centersOverlay.uneraseSplats();
-                        app.renderNextFrame = true;
+                        if (this.centersOverlay.uneraseLastOperation()) {
+                            app.renderNextFrame = true;
+                        }
                     });
                     buttonsContainer.appendChild(undoEraserBtn);
 
-                    // Apply erased points button — permanently removes erased splats from scene
+                    // Apply erased points button — permanently removes erased splats from scene (hidden)
                     const applyEraseBtn = document.createElement('button');
                     applyEraseBtn.id = 'applyEraseBtn';
                     applyEraseBtn.className = 'controlButton';
                     applyEraseBtn.title = 'Apply: permanently remove erased points from scene';
-                    applyEraseBtn.innerHTML = '&#x2714;'; // ✔
-                    applyEraseBtn.style.cssText = 'font-size: 20px; padding: 8px; cursor: pointer;';
+                    applyEraseBtn.innerHTML = svgIcon('applyIcon');
+                    applyEraseBtn.style.cssText = 'font-size: 28px; padding: 10px; cursor: pointer; display: none;';
                     applyEraseBtn.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -995,8 +976,8 @@ class Viewer {
                     boxSelectBtn.id = 'boxSelectBtn';
                     boxSelectBtn.className = 'controlButton';
                     boxSelectBtn.title = 'Box Select: draw rectangle to keep only enclosed points';
-                    boxSelectBtn.innerHTML = '&#x25A1;';
-                    boxSelectBtn.style.cssText = 'font-size: 20px; padding: 8px; cursor: pointer;';
+                    boxSelectBtn.innerHTML = svgIcon('boxSelectIcon');
+                    boxSelectBtn.style.cssText = 'font-size: 28px; padding: 10px; cursor: pointer;';
                     boxSelectBtn.addEventListener('click', (e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -1064,16 +1045,21 @@ class Viewer {
                         return pickerRef.getSplatsNearRay(nx, ny, getWorldRadius());
                     };
 
+                    // Track indices erased in current stroke for undo
+                    const currentStrokeIndices = new Set<number>();
+
                     // Eraser pointer events
                     canvas.addEventListener('pointerdown', (e: PointerEvent) => {
                         if (!eraserModeState.enabled || e.button !== 0) return;
                         e.preventDefault();
                         e.stopPropagation();
                         eraserModeState.isErasing = true;
+                        currentStrokeIndices.clear();
                         // Clear preview, do actual erase
                         this.centersOverlay.clearErasePreview();
                         const indices = findIndices(e.clientX, e.clientY);
                         if (indices.length > 0) {
+                            indices.forEach((i: number) => currentStrokeIndices.add(i));
                             this.centersOverlay.eraseSplats(indices);
                             app.renderNextFrame = true;
                         }
@@ -1087,6 +1073,7 @@ class Viewer {
                             // Erasing: actually erase points
                             const indices = findIndices(e.clientX, e.clientY);
                             if (indices.length > 0) {
+                                indices.forEach((i: number) => currentStrokeIndices.add(i));
                                 this.centersOverlay.eraseSplats(indices);
                                 app.renderNextFrame = true;
                             }
@@ -1100,6 +1087,9 @@ class Viewer {
                     });
 
                     const stopErasing = () => {
+                        if (eraserModeState.isErasing && currentStrokeIndices.size > 0) {
+                            this.centersOverlay.pushEraseOperation([...currentStrokeIndices]);
+                        }
                         eraserModeState.isErasing = false;
                     };
                     canvas.addEventListener('pointerup', stopErasing);
@@ -1166,7 +1156,14 @@ class Viewer {
                         const keepIndices = pickerRef.getPointsInScreenRect(nx1, ny1, nx2, ny2);
                         if (keepIndices.length === 0) return;
 
-                        this.centersOverlay.eraseAllExcept(new Set(keepIndices));
+                        const keepSet = new Set<number>(keepIndices);
+                        const totalPoints = pickerRef.cachedPositions?.length ?? 0;
+                        const erasedByBox: number[] = [];
+                        for (let i = 0; i < totalPoints; i++) {
+                            if (!keepSet.has(i)) erasedByBox.push(i);
+                        }
+                        this.centersOverlay.pushEraseOperation(erasedByBox);
+                        this.centersOverlay.eraseAllExcept(keepSet);
                         app.renderNextFrame = true;
                     });
 
@@ -1192,10 +1189,10 @@ class Viewer {
                             const normal = computePCANormalFromPoints(indices, picker.cachedPositions, worldMatrix);
 
                             if (normal) {
-                                // Compute centroid of selected points
                                 const centroid = computeCentroid(normalPoints.map(p => p.position));
-                                this.normalMarker.setComputedNormal(normal, centroid);
+                                this.normalMarker.setComputedNormal(normal, centroid, true);
                                 this.normalListUI.showNormalResult(normal);
+                                this.gravityHelper?.setNormal(centroid, normal);
                             } else {
                                 alert('Failed to compute normal. Try selecting more spread-out points.');
                             }
@@ -1207,6 +1204,7 @@ class Viewer {
                         if (confirm('Clear all marked points?')) {
                             this.pointMarker.clearAll();
                             this.normalMarker.clearAll();
+                            this.gravityHelper?.clear();
                             if (this.normalListUI) this.normalListUI.clearResult();
                             app.renderNextFrame = true;
                         }
@@ -1279,26 +1277,34 @@ class Viewer {
                                 return null;
                             };
 
+                            const showLoadedPoints = () => {
+                                state.showCenters = true;
+                                this.centersOverlay.setEnabled(true);
+                                events.fire('showCenters:changed', true);
+                                if (pointListContainer) pointListContainer.style.display = '';
+                            };
                             if (Array.isArray(jsonData)) {
-                                // Old format: plain array of [x,y,z]
                                 const loadedCount = await this.pointMarker.importFromJSON(jsonData, findPointCallback);
+                                showLoadedPoints();
                                 alert(`Loaded ${loadedCount} of ${jsonData.length} points`);
                             } else if (jsonData && typeof jsonData === 'object') {
-                                // New format: { points: [...], normal_direction: {...} }
                                 if (jsonData.points && Array.isArray(jsonData.points)) {
                                     const loadedCount = await this.pointMarker.importFromJSON(jsonData.points, findPointCallback);
+                                    showLoadedPoints();
                                     console.log(`Loaded ${loadedCount} regular points`);
                                 }
                                 if (jsonData.normal_direction) {
                                     const nd = jsonData.normal_direction;
                                     this.normalMarker.clearAll();
+                                    this.gravityHelper?.clear();
                                     if (nd.points && Array.isArray(nd.points)) {
                                         for (const pt of nd.points) {
                                             if (Array.isArray(pt) && pt.length >= 3) {
-                                                // Find the closest point in the cloud
                                                 const result = await findPointCallback(pt[0], pt[1], pt[2]);
-                                                if (result) {
+                                                if (result && result.position.distance(new Vec3(pt[0], pt[1], pt[2])) <= 0.01) {
                                                     this.normalMarker.addPoint(result.index, result.position);
+                                                } else {
+                                                    this.normalMarker.addPointAtPosition(new Vec3(pt[0], pt[1], pt[2]));
                                                 }
                                             }
                                         }
@@ -1306,12 +1312,13 @@ class Viewer {
                                     if (nd.normal && nd.centroid) {
                                         const normal = new Vec3(nd.normal[0], nd.normal[1], nd.normal[2]);
                                         const centroid = new Vec3(nd.centroid[0], nd.centroid[1], nd.centroid[2]);
-                                        this.normalMarker.setComputedNormal(normal, centroid);
+                                        this.normalMarker.setComputedNormal(normal, centroid, true);
+                                        this.gravityHelper?.setNormal(centroid, normal);
                                         if (this.normalListUI) {
                                             this.normalListUI.showNormalResult(normal);
                                         }
                                     }
-                                    const totalLoaded = (jsonData.points?.length || 0) + (nd.points?.length || 0);
+                                    showLoadedPoints();
                                     alert(`Loaded points and normal direction data`);
                                 } else {
                                     alert('Invalid JSON format');
@@ -1330,22 +1337,21 @@ class Viewer {
                     loadBtn.id = 'loadPointsBtn';
                     loadBtn.className = 'controlButton';
                     loadBtn.title = 'Load Points from JSON';
-                    loadBtn.innerHTML = '📂';
-                    loadBtn.style.cssText = 'font-size: 20px; padding: 8px;';
+                    loadBtn.innerHTML = svgIcon('loadIcon');
+                    loadBtn.style.cssText = 'font-size: 28px; padding: 10px;';
                     loadBtn.addEventListener('click', () => loadInput.click());
                     buttonsContainer.appendChild(loadBtn);
 
                     // Reorder buttons: point tools, eraser, box select, etc.
                     const buttonOrder = [
-                        'toggleSelectBtn', 'clearAllPointsBtn', 'savePointsBtn', 'toggleNormalBtn',
+                        'toggleSelectBtn', 'clearAllPointsBtn', 'savePointsBtn', 'loadPointsBtn', 'toggleNormalBtn',
                         'toggleEraserBtn', 'boxSelectBtn', 'eraserSliderContainer', 'undoEraserBtn',
-                        'applyEraseBtn', 'loadPointsBtn'
+                        'applyEraseBtn'
                     ];
                     buttonOrder.forEach(id => {
                         const el = document.getElementById(id);
                         if (el) buttonsContainer.appendChild(el);
                     });
-                    loadBtn.style.display = 'none';
                 }
             }
 
@@ -1481,32 +1487,15 @@ class Viewer {
         });
     }
 
-    updateCameraGizmo() {
-        if (!this.cameraGizmo) return;
-
-        // Get fixed camera position and orientation from camera manager
-        const m = [
-            [0.9786331529531755, 0.03990237507444073, -0.20170511248935927],
-            [-0.07133697531067347, 0.9859460257592279, -0.15106776705541258],
-            [0.19284239133149841, 0.16222895781272428, 0.9677259825759287]
-        ];
-
-        const position = new Vec3(0.4214223792319385, 0.5457549945299672, -1.2059909003747704);
-
-        // Extract forward and up vectors from rotation matrix
-        // Assuming columns are right, up, forward
-        const forward = new Vec3(m[0][2], m[1][2], m[2][2]).normalize();
-        const up = new Vec3(m[0][1], m[1][1], m[2][1]).normalize();
-
-        this.cameraGizmo.setPositionAndRotation(position, forward, up);
-    }
-
     // configure camera based on application mode and post process settings
     configureCamera(settings: ExperienceSettings) {
         const { global } = this;
         const { app, camera } = global;
         const { postEffectSettings } = settings;
         const { background } = settings;
+        // settings.json uses 0-255 RGBA; PlayCanvas Color expects 0-1
+        const raw = background.color;
+        const bgColor = [0, 0, 0, 1];
 
         const enableCameraFrame = !app.xr.active && (anyPostEffectEnabled(postEffectSettings) || settings.highPrecisionRendering);
 
@@ -1531,7 +1520,7 @@ class Viewer {
                 return true;
             };
 
-            camera.camera.clearColor = new Color(background.color);
+            camera.camera.clearColor = new Color(bgColor);
         } else {
             // no post effects needed, destroy camera frame if it exists
             if (this.cameraFrame) {
@@ -1541,7 +1530,7 @@ class Viewer {
 
             if (!app.xr.active) {
                 camera.camera.toneMapping = tonemapTable[settings.tonemapping];
-                camera.camera.clearColor = new Color(background.color);
+                camera.camera.clearColor = new Color(bgColor);
             }
         }
     }
